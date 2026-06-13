@@ -19,9 +19,13 @@ pico_inc = include_directories(
     is_system: true,
 )
 
+rp2350_inc = include_directories('.')
+
 sndfx_rp2350 = executable('sndfx',
     common_src,
-    include_directories: [common_inc, pico_inc],
+    'ADC.cpp',
+    'DAC.cpp',
+    include_directories: [common_inc, rp2350_inc, pico_inc],
     dependencies: [etl_dep],
     cpp_args: ['-include', meson.project_source_root() / 'common' / 'etl_profile.h'],
 )

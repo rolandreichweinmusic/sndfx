@@ -17,9 +17,7 @@ etl_dep = dependency('etl',
 # Common sources
 common_inc = include_directories('common')
 common_src = files('common/main.cpp',
-'common/ADC.cpp',
 'common/Compressor.cpp',
-'common/DAC.cpp',
 'common/Operation.cpp')
 
 # Platform selection based on cross-compilation
