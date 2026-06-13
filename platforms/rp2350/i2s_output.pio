@@ -1,0 +1,44 @@
+; I2S output PIO program for PCM5102A
+; Writes 32-bit samples synchronized to self-generated BCLK and LRCLK
+;
+; Pin mapping:
+;   OUT pin 0:      data (DIN)
+;   Side-set pin 0: BCLK
+;   Side-set pin 1: LRCLK (directly follows BCLK pin)
+;
+; The RP2350 generates BCLK and LRCLK for the PCM5102A.
+; Data is shifted out MSB first on the falling edge of BCLK.
+
+.program i2s_output
+.side_set 2
+
+; Left channel: LRCLK low
+    set x, 31          side 0b00    ; 32 bits, BCLK=0 LRCLK=0
+left_loop:
+    out pins, 1        side 0b00    ; output data bit, BCLK=0
+    jmp x-- left_loop  side 0b01   ; clock rising edge, BCLK=1 LRCLK=0
+
+; Right channel: LRCLK high
+    set x, 31          side 0b10    ; 32 bits, BCLK=0 LRCLK=1
+right_loop:
+    out pins, 1        side 0b10    ; output data bit, BCLK=0
+    jmp x-- right_loop side 0b11   ; clock rising edge, BCLK=1 LRCLK=1
+
+% c-sdk {
+static inline void i2s_output_program_init(PIO pio, uint sm, uint offset, uint data_pin, uint bclk_pin) {
+    pio_sm_config c = i2s_output_program_get_default_config(offset);
+
+    sm_config_set_out_pins(&c, data_pin, 1);
+    sm_config_set_sideset_pins(&c, bclk_pin);
+    sm_config_set_out_shift(&c, false, true, 32); // shift left, autopull, 32 bits
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    pio_gpio_init(pio, data_pin);
+    pio_gpio_init(pio, bclk_pin);
+    pio_gpio_init(pio, bclk_pin + 1);  // LRCLK
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 1, true);    // data out
+    pio_sm_set_consecutive_pindirs(pio, sm, bclk_pin, 2, true);    // bclk, lrclk out
+
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}

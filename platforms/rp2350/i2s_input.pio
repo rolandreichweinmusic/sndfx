@@ -1,0 +1,46 @@
+; I2S input PIO program for PCM1808
+; Reads 32-bit samples synchronized to external BCLK and LRCLK
+;
+; Pin mapping:
+;   IN pin 0: data (SD)
+;   JMP pin:  LRCLK (word select)
+;   GPIO:     BCLK (bit clock) - used via wait
+;
+; The PCM1808 provides BCLK and LRCLK externally.
+; This program waits for LRCLK low (left channel), then clocks in 32 bits
+; on each BCLK rising edge.
+
+.program i2s_input
+
+; Wait for LRCLK to go low (left channel start)
+wait_left:
+    jmp pin wait_left       ; loop while LRCLK is high
+
+; Read 32 bits, one per BCLK rising edge
+.wrap_target
+    set x, 31              ; 32 bits to read
+bitloop:
+    wait 0 pin 1           ; wait for BCLK low (BCLK is data_pin+1)
+    wait 1 pin 1           ; wait for BCLK high (sample on rising edge)
+    in pins, 1             ; shift in data bit
+    jmp x-- bitloop        ; loop for all 32 bits
+    jmp pin wait_left      ; if LRCLK high again, re-sync
+.wrap
+
+% c-sdk {
+static inline void i2s_input_program_init(PIO pio, uint sm, uint offset, uint data_pin) {
+    pio_sm_config c = i2s_input_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, data_pin);
+    sm_config_set_in_shift(&c, false, true, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    sm_config_set_jmp_pin(&c, data_pin + 2); // LRCLK
+    sm_config_set_clkdiv(&c, 1.0f);
+
+    pio_gpio_init(pio, data_pin);
+    pio_gpio_init(pio, data_pin + 1);
+    pio_gpio_init(pio, data_pin + 2);
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 3, false);
+
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}
