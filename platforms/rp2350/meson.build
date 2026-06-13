@@ -1,4 +1,9 @@
-pico_sdk_path = get_option('pico_sdk_path')
+pico_sdk_path = run_command('sh', '-c', 'echo ${PICO_SDK_PATH:-}', check: true).stdout().strip()
+if pico_sdk_path != ''
+    message('Using PICO_SDK_PATH: ' + pico_sdk_path)
+else
+    error('PICO_SDK_PATH environment variable is not defined')
+endif
 
 pioasm_src = files(
     pico_sdk_path / 'tools' / 'pioasm' / 'main.cpp',

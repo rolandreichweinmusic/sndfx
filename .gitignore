@@ -2,3 +2,4 @@ build-linux/
 build-rp2350/
 subprojects/etl/
 subprojects/packagecache/
+cross/rp2350.ini

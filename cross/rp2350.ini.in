@@ -1,10 +1,10 @@
 [binaries]
-c = '/home/rr/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-gcc'
-cpp = '/home/rr/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-g++'
-ar = '/home/rr/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-ar'
-strip = '/home/rr/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-strip'
-objcopy = '/home/rr/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-objcopy'
-size = '/home/rr/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-size'
+c = '@TOOLCHAIN_PATH@/bin/arm-none-eabi-gcc'
+cpp = '@TOOLCHAIN_PATH@/bin/arm-none-eabi-g++'
+ar = '@TOOLCHAIN_PATH@/bin/arm-none-eabi-ar'
+strip = '@TOOLCHAIN_PATH@/bin/arm-none-eabi-strip'
+objcopy = '@TOOLCHAIN_PATH@/bin/arm-none-eabi-objcopy'
+size = '@TOOLCHAIN_PATH@/bin/arm-none-eabi-size'
 
 [built-in options]
 cpp_std = 'c++23'
@@ -18,6 +18,3 @@ system = 'none'
 cpu_family = 'arm'
 cpu = 'cortex-m33'
 endian = 'little'
-
-[properties]
-pico_sdk_path = '/home/rr/pico/pico-sdk'

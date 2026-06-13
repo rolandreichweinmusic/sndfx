@@ -2,6 +2,7 @@
 
 set -e
 
+./cross/configure.sh 
 meson setup build-linux
 meson compile -C build-linux
 meson setup build-rp2350 --cross-file cross/rp2350.ini

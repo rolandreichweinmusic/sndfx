@@ -1,4 +1,2 @@
-option('pico_sdk_path', type: 'string', value: '/home/rr/pico/pico-sdk',
-       description: 'Path to the Raspberry Pi Pico SDK')
 option('pico_board', type: 'string', value: 'seeed_xiao_rp2350',
        description: 'Pico board type')
