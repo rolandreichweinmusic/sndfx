@@ -1,0 +1,4 @@
+build-linux/
+build-rp2350/
+subprojects/etl/
+subprojects/packagecache/
