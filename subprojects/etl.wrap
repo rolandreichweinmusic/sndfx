@@ -1,6 +1,7 @@
 [wrap-git]
 url = https://github.com/ETLCPP/etl.git
-revision = 20.47.1
+#revision = 20.47.1
+revision = development
 depth = 1
 
 [provide]
