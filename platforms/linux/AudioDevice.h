@@ -4,7 +4,12 @@
 
 class AudioDevice {
 public:
-    AudioDevice(const char* device = "hw:CARD=UR22C,DEV=0",
+    // "plughw" (not raw "hw") so ALSA converts the device's native channel
+    // count / format / rate to the mono S32 48 kHz this pipeline assumes. A raw
+    // "hw" device does no conversion, so on a stereo-only interface like the
+    // UR22C the streams would silently run in stereo and the mono read/write
+    // loop would misread the interleaved samples -> heavy distortion.
+    AudioDevice(const char* device = "plughw:CARD=UR22C,DEV=0",
                 unsigned int rate = 48000,
                 unsigned int channels = 1);
     ~AudioDevice();

@@ -80,10 +80,24 @@ void AudioDevice::configure(snd_pcm_t* pcm, unsigned int rate, unsigned int chan
     snd_pcm_hw_params_t* params;
     snd_pcm_hw_params_alloca(&params);
     snd_pcm_hw_params_any(pcm, params);
-    snd_pcm_hw_params_set_access(pcm, params, SND_PCM_ACCESS_RW_INTERLEAVED);
-    snd_pcm_hw_params_set_format(pcm, params, SND_PCM_FORMAT_S32_LE);
-    snd_pcm_hw_params_set_channels(pcm, params, channels);
-    snd_pcm_hw_params_set_rate_near(pcm, params, &rate, nullptr);
+
+    // Check every parameter. Ignoring these return values is how silent
+    // mismatches creep in: if the device cannot honour the exact format or
+    // channel count requested it keeps its native geometry, while the
+    // capture/playback loop keeps interpreting the bytes as mono S32 -- which
+    // is heard as heavily distorted audio rather than a clean failure.
+    int err = snd_pcm_hw_params_set_access(pcm, params, SND_PCM_ACCESS_RW_INTERLEAVED);
+    if (err < 0)
+        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    err = snd_pcm_hw_params_set_format(pcm, params, SND_PCM_FORMAT_S32_LE);
+    if (err < 0)
+        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    err = snd_pcm_hw_params_set_channels(pcm, params, channels);
+    if (err < 0)
+        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    err = snd_pcm_hw_params_set_rate_near(pcm, params, &rate, nullptr);
+    if (err < 0)
+        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
 
     // Pin the period and buffer sizes; the _near calls write back the values
     // actually selected by the device.
@@ -92,7 +106,7 @@ void AudioDevice::configure(snd_pcm_t* pcm, unsigned int rate, unsigned int chan
     snd_pcm_uframes_t buffer = period * periodsPerBuffer;
     snd_pcm_hw_params_set_buffer_size_near(pcm, params, &buffer);
 
-    int err = snd_pcm_hw_params(pcm, params);
+    err = snd_pcm_hw_params(pcm, params);
     if (err < 0)
         throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
 

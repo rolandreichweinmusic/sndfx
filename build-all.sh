@@ -2,6 +2,8 @@
 
 set -e
 
+./check-env.sh
+
 ./cross/configure.sh 
 
 meson setup build-linux --native-file cross/linux-clang18.ini

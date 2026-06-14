@@ -1,5 +1,3 @@
-#include "etl/vector.h"
-
 #include "Platform.h"
 #include "ADC.h"
 #include "DAC.h"
