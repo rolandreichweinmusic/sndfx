@@ -4,7 +4,7 @@
 
 class AudioDevice {
 public:
-    AudioDevice(const char* device = "default",
+    AudioDevice(const char* device = "hw:CARD=UR22C,DEV=0",
                 unsigned int rate = 48000,
                 unsigned int channels = 1);
     ~AudioDevice();
