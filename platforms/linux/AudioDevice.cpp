@@ -1,4 +1,5 @@
 #include "AudioDevice.h"
+#include <cerrno>
 #include <stdexcept>
 
 AudioDevice::AudioDevice(const char* device, unsigned int rate, unsigned int channels) {
@@ -13,12 +14,17 @@ AudioDevice::AudioDevice(const char* device, unsigned int rate, unsigned int cha
     configure(_capture, rate, channels);
     configure(_playback, rate, channels);
 
-    // Link streams for synchronized start
+    // Link streams for synchronized start. Not every device supports this:
+    // dmix/dsnoop and the PulseAudio plugin return -ENOSYS ("Function not
+    // implemented"). Linking is only an optimization, so fall back to starting
+    // the streams independently instead of aborting.
     err = snd_pcm_link(_capture, _playback);
-    if (err < 0)
+    if (err < 0 && err != -ENOSYS)
         throw std::runtime_error(snd_strerror(err));
 
     snd_pcm_prepare(_capture);
+    if (err < 0)
+        snd_pcm_prepare(_playback); // not linked: prepare playback separately
 }
 
 AudioDevice::~AudioDevice() {
