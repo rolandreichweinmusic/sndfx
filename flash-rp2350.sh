@@ -30,4 +30,3 @@ else
     picotool load "$FILE"
     picotool reboot
 fi
-
