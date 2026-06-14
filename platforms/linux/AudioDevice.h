@@ -14,6 +14,7 @@ public:
 
 private:
     void configure(snd_pcm_t* pcm, unsigned int rate, unsigned int channels);
+    void primePlayback(unsigned int channels);
 
     snd_pcm_t* _capture = nullptr;
     snd_pcm_t* _playback = nullptr;

@@ -7,10 +7,15 @@ Sound Effects Processor
 
 ### Linux (native, for testing)
 
+The host code uses C++23, which needs GCC 14+ or Clang 18+. Select
+one via a meson native file (the distro-default GCC 13 will not compile it):
+
 ```sh
-meson setup build-linux
+meson setup build-linux --native-file cross/linux-gcc14.ini
 meson compile -C build-linux
 ```
+
+To use Clang 18 instead, swap in `cross/linux-clang18.ini`.
 
 ### RP2350 (cross-compiled)
 
