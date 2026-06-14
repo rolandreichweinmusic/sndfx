@@ -15,7 +15,7 @@ public:
     // semantics. Saturate via a wider intermediate type rather than relying on
     // unsigned wrap.
     using SampleType = int32_t;
-    static constexpr size_t bufferSize = 256;
+    static constexpr size_t bufferSize = 128;
     using BufferType = etl::array<SampleType, bufferSize>;
 
     BufferType& getBuffer();

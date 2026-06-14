@@ -1,4 +1,5 @@
 #include "AudioDevice.h"
+#include "Operation.h"
 #include <etl/array.h>
 #include <etl/exception.h>
 #include <cerrno>
@@ -8,8 +9,8 @@ namespace {
 // Period matched to Operation::bufferSize (the per-call transfer size), with a
 // few periods of headroom in the ring buffer to absorb scheduling jitter. An
 // undersized buffer is the usual cause of xruns in a synchronous loop.
-constexpr snd_pcm_uframes_t framesPerPeriod = 64;
-constexpr unsigned int periodsPerBuffer = 2;
+constexpr snd_pcm_uframes_t framesPerPeriod = Operation::bufferSize;
+constexpr unsigned int periodsPerBuffer = 4;
 
 // Upper bound on channels for the stack-allocated silence buffer used to prime
 // playback. The Linux test harness runs mono/stereo.
