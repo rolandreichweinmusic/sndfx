@@ -8,8 +8,8 @@ namespace {
 // Period matched to Operation::bufferSize (the per-call transfer size), with a
 // few periods of headroom in the ring buffer to absorb scheduling jitter. An
 // undersized buffer is the usual cause of xruns in a synchronous loop.
-constexpr snd_pcm_uframes_t framesPerPeriod = 256;
-constexpr unsigned int periodsPerBuffer = 4;
+constexpr snd_pcm_uframes_t framesPerPeriod = 64;
+constexpr unsigned int periodsPerBuffer = 2;
 
 // Upper bound on channels for the stack-allocated silence buffer used to prime
 // playback. The Linux test harness runs mono/stereo.
