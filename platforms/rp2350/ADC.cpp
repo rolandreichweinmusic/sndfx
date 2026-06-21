@@ -2,77 +2,51 @@
 
 #include "ADC.h"
 #include "i2s_input.pio.h"
+#include "i2s_clkgen.pio.h"
 #include "mclk.pio.h"
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
-#include "hardware/gpio.h"
-#include "hardware/timer.h"
 
 ADC* ADC::_instance = nullptr;
 
-// Diagnostic (read by DAC.cpp): number of completed capture DMAs. Stays 0 if the
-// PCM1808 is not clocking the input PIO (no BCK/LRCK), so capture never completes
-// and this never advances. Lets the DAC distinguish "input not clocking" from
-// "input clocking but data is zero".
+// Liveness flag (read by DAC.cpp): number of completed capture DMAs. While this
+// stays 0 the input path has produced no samples yet; the DAC plays a tone so a
+// non-capturing input is audibly distinct from captured silence.
 volatile uint32_t g_adcCaptureCompletions = 0;
 
-// Diagnostic (read by DAC.cpp): first dead link in the input clock chain.
-//   0 = SCKI, BCK and LRCK all toggle (clocks present)
-//   1 = SCKI (GPIO5) not toggling   -> RP2350 master-clock output dead/unwired
-//   2 = SCKI ok, BCK (GPIO3) static -> PCM1808 not producing clocks (MD0/MD1 straps, SCKI wire)
-//   3 = BCK ok, LRCK (GPIO4) static -> LRCK wiring
-volatile uint32_t g_adcClockDiag = 0;
-
-namespace {
-// Sample a pin many times; return true if it ever changes state. The window
-// (~10 ms at the -O0 build setting) spans hundreds of LRCK periods and many
-// thousands of BCK/SCKI periods, so any live clock is detected reliably.
-bool pinToggles(uint pin) {
-    const bool first = gpio_get(pin);
-    for (uint32_t i = 0; i < 300000; ++i) {
-        if (gpio_get(pin) != first)
-            return true;
-    }
-    return false;
-}
-} // namespace
-
 ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
-         uint sck_pin, uint sck_sm)
+         uint sck_pin, uint sck_sm, uint clk_sm)
     : _pio(pio), _sm(sm) {
-    // The PCM1808 runs in master mode, deriving BCK and LRCK from its system
-    // clock input (SCKI). Generate SCKI on a second state machine first so the
-    // codec is already producing the I2S clocks by the time the input state
-    // machine starts.
+    // The PCM1808 runs in SLAVE mode: the RP2350 is the I2S clock master for the
+    // input path and drives BCK + LRCK itself (see i2s_clkgen.pio), so capture
+    // is framed by a deterministic, clk_sys-synchronous timebase rather than by
+    // the codec's own (jittery, PLL-less) master clock -- which made capture
+    // intermittent. The codec still needs SCKI; the mclk state machine supplies
+    // it as before.
     //
+    // Derive the dividers from the *actual* system clock rather than assuming
+    // 150 MHz: if runtime_init_clocks ever brings clk_sys up at a different
+    // frequency, a hardcoded constant would skew the clocks (and thus fs)
+    // without any obvious symptom.
+    const float sys_clk_hz = (float)clock_get_hz(clk_sys);
+
     // SCKI = 256 * fs = 12.288 MHz for fs = 48 kHz. The mclk program toggles the
     // pin once per instruction (two instructions per period), so the state
     // machine runs at 2 * SCKI.
-    //
-    // Derive the divider from the *actual* system clock rather than assuming
-    // 150 MHz: if runtime_init_clocks ever brings clk_sys up at a different
-    // frequency, a hardcoded constant would skew SCKI (and thus the codec's fs)
-    // without any obvious symptom.
-    const float sys_clk_hz = (float)clock_get_hz(clk_sys);
     constexpr float scki_hz = 256.0f * 48000.0f; // 12.288 MHz
     uint sck_offset = pio_add_program(_pio, &mclk_program);
     mclk_program_init(_pio, sck_sm, sck_offset, sck_pin, sys_clk_hz / (2.0f * scki_hz));
 
-    // ---- PCM1808 startup-reset workaround ----
-    // The codec's 3.3 V supply comes up at board power-on, but SCKI only starts
-    // here, hundreds of ms later, once the RP2350 has booted. A PCM1808 whose
-    // internal power-on reset completed without a valid SCKI can latch into a
-    // state where it never generates BCK/LRCK -- exactly the "SCKI toggles, BCK
-    // static" symptom. Master mode is a pure SCKI divider (no PLL), so the only
-    // lever we have is SCKI itself: now that the supply is long stable, hold
-    // SCKI running briefly, then stop and restart it to present a clean clock
-    // (re)start that re-triggers the codec's clock generation.
-    busy_wait_us_32(100000);                       // 100 ms: supply + SCKI settle
-    pio_sm_set_enabled(_pio, sck_sm, false);       // drop SCKI
-    busy_wait_us_32(5000);                          // 5 ms with SCKI stopped
-    pio_sm_set_enabled(_pio, sck_sm, true);        // clean SCKI restart (the "kick")
-    busy_wait_us_32(5000);                          // let the codec re-acquire
+    // BCK = 64 * fs = 3.072 MHz, generated identically to the output path: the
+    // clkgen program runs at 2 * BCK (two instructions per bit) so the divider
+    // matches DAC.cpp. BCK is on bclk_pin (GPIO3) and LRCK on bclk_pin + 1
+    // (GPIO4); both are driven as outputs to the PCM1808. SCKI and BCK/LRCK are
+    // both derived from clk_sys (frequency-locked), so SCKI jitter now only
+    // affects ADC SNR, not framing.
+    const float i2s_clkdiv = sys_clk_hz / (48000.0f * 64.0f * 2.0f);
+    uint clk_offset = pio_add_program(_pio, &i2s_clkgen_program);
+    i2s_clkgen_program_init(_pio, clk_sm, clk_offset, bclk_pin, i2s_clkdiv);
 
     // Load PIO program
     _offset = pio_add_program(_pio, &i2s_input_program);
@@ -87,19 +61,19 @@ ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
     sm_config_set_in_shift(&c, false, true, 32); // shift left (MSB-first), autopush at 32 bits
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
 
-    // Configure pins
+    // Configure pins. Only DOUT (data_pin / GPIO2) is owned by the input SM as
+    // an input. BCK (bclk_pin) and LRCK (bclk_pin + 1) are driven by the clkgen
+    // SM above; the input SM reads them back through the PIO input synchronisers
+    // (wait pin / jmp pin) to stay frame-aligned, so it must NOT claim them as
+    // its own (input) pindirs here.
     pio_gpio_init(_pio, data_pin);
-    pio_gpio_init(_pio, bclk_pin);
-    pio_gpio_init(_pio, lrclk_pin);
     pio_sm_set_consecutive_pindirs(_pio, _sm, data_pin, 1, false);   // data in
-    pio_sm_set_consecutive_pindirs(_pio, _sm, bclk_pin, 2, false);   // bclk, lrclk in
 
     // Wait pin is LRCLK for left/right sync
     sm_config_set_jmp_pin(&c, lrclk_pin);
 
-    // Clock divider: PIO clock = sys_clk / div
-    // PCM1808 provides BCLK externally, PIO samples on it
-    // Set div to 1 (PIO runs at sys clock, syncs to external BCLK via wait instructions)
+    // Clock divider: PIO clock = sys_clk / div. The input SM samples the (now
+    // RP2350-generated) BCLK via wait instructions, so it runs at full speed.
     sm_config_set_clkdiv(&c, 1.0f);
 
     pio_sm_init(_pio, _sm, _offset, &c);
@@ -145,22 +119,6 @@ ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
     // Arm capture, then enable the SM so samples flow into the RX FIFO.
     dma_channel_start(_dma_chan);
     pio_sm_set_enabled(_pio, _sm, true);
-
-    // ---- Diagnostic: detect which input clock (if any) is missing. ----
-    // SCKI has been generated since mclk_program_init() above; give the PCM1808
-    // a few ms to start dividing it into BCK/LRCK, then check each line. The
-    // first one found static identifies the broken link in the clock chain.
-    for (uint32_t s = 0; s < 200000; ++s) {
-        asm volatile("" ::: "memory"); // settle; barrier keeps the loop at -O0+
-    }
-    if (!pinToggles(sck_pin))
-        g_adcClockDiag = 1; // RP2350 SCKI output dead/unwired
-    else if (!pinToggles(bclk_pin))
-        g_adcClockDiag = 2; // PCM1808 not producing BCK (master straps / SCKI wire)
-    else if (!pinToggles(lrclk_pin))
-        g_adcClockDiag = 3; // LRCK missing
-    else
-        g_adcClockDiag = 0; // all input clocks present
 }
 
 void ADC::dma_isr() {

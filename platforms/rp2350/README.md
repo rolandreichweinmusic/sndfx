@@ -2,44 +2,57 @@ Target device specific implementation
 
 ## PCM1808 ADC wiring
 
-The PCM1808 is connected to the RP2350 over I2S and is operated in **master
-mode**: the codec generates the bit clock (BCK) and word clock (LRCK) and the
-RP2350 PIO state machine samples the data synchronously to those clocks (see
-[i2s_input.pio](i2s_input.pio) and [ADC.cpp](ADC.cpp)).
+The PCM1808 is connected to the RP2350 over I2S and is operated in **slave
+mode**: the RP2350 generates the bit clock (BCK) and word clock (LRCK) and the
+PCM1808 clocks its data out synchronously to them. A dedicated PIO state machine
+drives BCK/LRCK (see [i2s_clkgen.pio](i2s_clkgen.pio)) and a second state machine
+samples the data (see [i2s_input.pio](i2s_input.pio) and [ADC.cpp](ADC.cpp)).
+
+> Why slave mode: the PCM1808 was originally run in master mode, generating
+> BCK/LRCK from SCKI itself. The PCM1808 has no PLL, so its master clock output
+> inherited the jitter of the (fractional-divider) SCKI and sat at the margin of
+> what the RP2350 input PIO could reliably sample -- capture was intermittent.
+> Driving BCK/LRCK from the RP2350 makes the input framing synchronous to
+> `clk_sys` and deterministic. SCKI is still supplied to the codec; its jitter
+> now only affects ADC SNR, not whether frames are captured.
 
 ### I2S signal connections
 
 The pins below are the defaults declared in
-[ADC.h](ADC.h#L10). They are consecutive GPIOs because the PIO program derives
-BCK and LRCK from `data_pin + 1` and `data_pin + 2`.
+[ADC.h](ADC.h#L10). BCK and LRCK are consecutive GPIOs because the clock
+generator drives them from a 2-pin side-set group (`bclk_pin` and `bclk_pin + 1`).
 
 | PCM1808 pin | Signal              | RP2350 GPIO | Direction (RP2350) |
 | ----------- | ------------------- | ----------- | ------------------ |
 | DOUT        | Serial data (SD)    | GPIO2       | Input              |
-| BCK         | Bit clock           | GPIO3       | Input              |
-| LRCK        | Left/right word clk | GPIO4       | Input              |
+| BCK         | Bit clock           | GPIO3       | Output             |
+| LRCK        | Left/right word clk | GPIO4       | Output             |
 
 The PCM1808 is a **24-bit** converter strapped for **Philips I2S** format
-(FMT = GND). In I2S master mode it emits BCK = 64 fs (32 bit-clocks per channel
-slot) and places the 24-bit two's-complement sample in the most-significant bits
-of each 32-bit slot, with the low 8 bits driven to zero. Philips I2S delays the
-MSB by one BCK after each LRCK edge (the "1-bit delay"); the input PIO
+(FMT = GND). It receives BCK = 64 fs (32 bit-clocks per channel slot) and places
+the 24-bit two's-complement sample in the most-significant bits of each 32-bit
+slot, with the low 8 bits driven to zero. Philips I2S delays the MSB by one BCK
+after each LRCK edge (the "1-bit delay"); the input PIO
 ([i2s_input.pio](i2s_input.pio)) discards that leading bit so the sample lands
 MSB-justified in the `int32_t` pipeline (sign preserved at bit 31). The effective
 resolution is 24-bit.
 
 ### Clock and mode pins
 
-In master mode the PCM1808 derives BCK and LRCK from its system clock (SCKI).
-The RP2350 generates SCKI itself with a dedicated PIO state machine (see
-[mclk.pio](mclk.pio) and [ADC.cpp](ADC.cpp)), so no external oscillator is
-needed. The mode pins are strapped for master mode at 256 fs:
+The PCM1808 still needs a system clock (SCKI). The RP2350 generates SCKI with a
+dedicated PIO state machine (see [mclk.pio](mclk.pio) and [ADC.cpp](ADC.cpp)), so
+no external oscillator is needed. In slave mode the codec accepts BCK/LRCK as
+inputs and auto-detects the SCKI ratio:
 
 | PCM1808 pin | Purpose                          | Connection                              |
 | ----------- | -------------------------------- | --------------------------------------- |
 | SCKI        | System clock input (256 fs)      | GPIO5 (12.288 MHz from RP2350 PIO)      |
-| MD0 / MD1   | Master mode + SCKI ratio select  | Strap for master mode, 256 fs: both high|
+| MD0 / MD1   | Master/slave + SCKI ratio select | Strap for **slave** mode: both **GND**  |
 | FMT         | Audio data format select         | Strap for I2S format: GND               |
+
+> Verify MD0/MD1 against your PCM1808 datasheet's mode table: master mode at
+> 256 fs is both pins high, and slave mode (SCKI ratio auto-detected) is both
+> pins low. This firmware requires **slave mode**, so tie **MD0 and MD1 to GND**.
 
 ### Power and analog
 
@@ -51,13 +64,14 @@ needed. The mode pins are strapped for master mode at 256 fs:
 | VREF / VCOM   | Decoupling capacitors per PCM1808 datasheet   |
 
 > Note: the audio pipeline runs at **fs = 48 kHz** with 32-bit I2S frames
-> (32 bits left + 32 bits right), so SCKI is 256 fs = 12.288 MHz. A second PIO
-> state machine on `pio0` (sm 1) toggles GPIO5 to synthesise it. Because a
-> 12 MHz crystal cannot reach 12.288 MHz exactly through the PLL, the PIO
-> divider is fractional, giving a small (~0.03%) frequency offset and some
-> jitter; for best ADC SNR a dedicated low-jitter oscillator on SCKI is
-> preferable. The ADC (via SCKI) and DAC (via clk_sys) both derive from
-> clk_sys, so their sample rates stay locked to each other.
+> (32 bits left + 32 bits right), so BCK = 64 fs = 3.072 MHz and SCKI = 256 fs =
+> 12.288 MHz. The RP2350 generates both: a `pio0` state machine drives BCK/LRCK
+> on GPIO3/GPIO4 (same divider as the DAC output path), and another toggles
+> GPIO5 for SCKI. Because a 12 MHz crystal cannot reach 12.288 MHz exactly
+> through the PLL, the SCKI divider is fractional, giving a small (~0.03%)
+> frequency offset and some jitter; for best ADC SNR a dedicated low-jitter
+> 12.288 MHz oscillator on SCKI is preferable. BCK/LRCK (ADC and DAC) and SCKI
+> all derive from `clk_sys`, so every clock in the system stays frequency-locked.
 
 ## PCM5102A DAC wiring
 

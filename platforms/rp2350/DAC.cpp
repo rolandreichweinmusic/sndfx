@@ -8,32 +8,18 @@
 
 // ---------------------------------------------------------------------------
 // DIAGNOSTIC: set to 1 to run the ADC-liveness monitor; set to 0 for normal
-// passthrough.
+// passthrough. (Temporary confirmation aid for the slave-mode input bring-up.)
 //
-// The tone test already proved the output chain (PIO -> DMA -> completion IRQ
-// re-arm -> PCM5102A -> wiring -> speaker) is healthy, so the remaining silence
-// is in the capture path. This monitor makes the ADC's status audible:
-//
-//   * You hear LIVE INPUT audio -> the ADC is capturing. The original silence
-//     came from the blocking capture wait stalling the loop; the non-blocking
-//     ADC::process() is the real fix -- make it permanent (set this to 0).
-//   * You hear a repeating pattern of N short BEEPS -> no capture has completed;
-//     N identifies the first dead link in the input clock chain:
-//        1 beep  -> SCKI (GPIO5) not toggling: RP2350 master-clock output dead
-//                   or unwired.
-//        2 beeps -> SCKI ok but BCK (GPIO3) static: PCM1808 is not producing
-//                   clocks -> master-mode straps MD0/MD1 or the SCKI wire to
-//                   the codec.
-//        3 beeps -> BCK ok but LRCK (GPIO4) static: LRCK wiring.
-//   * You hear a STEADY tone -> all input clocks are present but capture still
-//     never completes: data line (GPIO2) wiring or PIO routing.
+//   * You hear LIVE INPUT audio -> the ADC is capturing: the slave-mode input
+//     path works. Set this to 0 for plain passthrough.
+//   * You hear a STEADY tone -> no capture has completed: the input path is
+//     still not delivering samples (check the PCM1808 slave straps MD0/MD1 = GND
+//     and the BCK/LRCK/DOUT/SCKI wiring).
 // ---------------------------------------------------------------------------
 #define SNDFX_DAC_ADC_MONITOR 1
 
-// Defined in ADC.cpp: capture DMA completion count (0 => input not clocking) and
-// the input-clock detector result (0 = clocks present, 1/2/3 = first dead link).
+// Defined in ADC.cpp: capture DMA completion count (0 => no samples captured yet).
 extern volatile uint32_t g_adcCaptureCompletions;
-extern volatile uint32_t g_adcClockDiag;
 
 namespace {
 // ~1 kHz square wave at 48 kHz: 24 samples high + 24 low = 48-sample period.
@@ -162,44 +148,14 @@ void DAC::process() {
 
 #if SNDFX_DAC_ADC_MONITOR
     if (g_adcCaptureCompletions == 0) {
-        // No captures yet: sound the clock-detector result. code 0 -> steady
-        // tone (clocks present, capture still failing); code N -> N short beeps
-        // identifying the first dead clock line (see the header comment).
-        const unsigned code = g_adcClockDiag;
-        bool toneOn = true;
-        if (code != 0) {
-            // Slow, widely-spaced beeps so the count per group is unmistakable:
-            // a long (~1.5 s) silence separates the repeating groups, while
-            // beeps inside a group are only ~200 ms apart (frame ~2.67 ms).
-            constexpr unsigned beepFrames = 45;  // ~120 ms tone burst
-            constexpr unsigned gapFrames  = 75;  // ~200 ms gap between beeps in a group
-            constexpr unsigned groupGap   = 560; // ~1.5 s gap between groups
-            const unsigned slot = beepFrames + gapFrames;
-            const unsigned cycle = code * slot + groupGap;
-            static unsigned frameCtr = 0;
-            const unsigned pos = frameCtr % cycle;
-            if (++frameCtr >= cycle)
-                frameCtr = 0;
-            toneOn = false;
-            for (unsigned k = 0; k < code; ++k) {
-                const unsigned start = k * slot;
-                if (pos >= start && pos < start + beepFrames) {
-                    toneOn = true;
-                    break;
-                }
-            }
-        }
-
+        // No captures yet -> emit a steady tone so a non-delivering input path
+        // is audibly distinct from captured silence. Flips to passthrough below
+        // the instant the first capture DMA completes.
         static unsigned tonePhase = 0;
         for (size_t i = 0; i < bufferSize; ++i) {
-            SampleType s = 0;
-            if (toneOn) {
-                s = (tonePhase < kToneHalfPeriod) ? kToneAmplitude : -kToneAmplitude;
-                if (++tonePhase >= 2 * kToneHalfPeriod)
-                    tonePhase = 0;
-            } else {
+            const SampleType s = (tonePhase < kToneHalfPeriod) ? kToneAmplitude : -kToneAmplitude;
+            if (++tonePhase >= 2 * kToneHalfPeriod)
                 tonePhase = 0;
-            }
             dst[2 * i]     = s;
             dst[2 * i + 1] = s;
         }

@@ -95,6 +95,14 @@ i2s_output_pio_h = custom_target('i2s_output_pio_h',
     command: [pioasm, '-o', 'c-sdk', '@INPUT@', '@OUTPUT@'],
 )
 
+# PCM1808 I2S clock (BCK/LRCK) generator: the RP2350 is the I2S clock master for
+# the input path with the PCM1808 in slave mode.
+i2s_clkgen_pio_h = custom_target('i2s_clkgen_pio_h',
+    input: 'i2s_clkgen.pio',
+    output: 'i2s_clkgen.pio.h',
+    command: [pioasm, '-o', 'c-sdk', '@INPUT@', '@OUTPUT@'],
+)
+
 # PCM1808 master clock (SCKI) generator.
 mclk_pio_h = custom_target('mclk_pio_h',
     input: 'mclk.pio',
@@ -173,6 +181,7 @@ sndfx_rp2350 = executable('sndfx',
     'Platform.cpp',
     i2s_input_pio_h,
     i2s_output_pio_h,
+    i2s_clkgen_pio_h,
     mclk_pio_h,
     include_directories: [common_inc, rp2350_inc, pico_inc],
     dependencies: [etl_dep],

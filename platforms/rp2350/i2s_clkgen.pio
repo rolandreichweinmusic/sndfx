@@ -1,0 +1,54 @@
+; I2S clock generator for the PCM1808 in SLAVE mode (Philips I2S format)
+;
+; The RP2350 is the I2S clock master for the input path: this program drives a
+; continuous BCK + LRCK so the PCM1808 (strapped for slave mode) clocks its data
+; out on a clean, deterministic timebase derived from clk_sys. The input PIO
+; (i2s_input.pio) then samples DOUT relative to these same clocks.
+;
+; Why this exists: in master mode the PCM1808 generated BCK/LRCK from its own
+; (jittery, fractional-divider) SCKI, and capture was intermittent. The PCM1808
+; has no PLL to clean SCKI, so its master clock output sat at the margin of what
+; the RP2350 input PIO could reliably sample. Driving BCK/LRCK from the RP2350
+; instead makes the input framing synchronous to clk_sys and deterministic.
+;
+; Pin mapping (side-set, 2 bits, value 0bWB):
+;   Side-set pin 0: BCK   (bit0 = B)
+;   Side-set pin 1: LRCK  (bit1 = W) -- directly follows BCK pin
+;
+; The BCK/LRCK waveform is intentionally IDENTICAL to the proven output path
+; (i2s_output.pio): 32 BCK per channel, LRCK toggling on a BCK falling edge so
+; each channel's MSB lands one BCK after the LRCK edge (the I2S 1-bit delay).
+; This is the output program with every data `out` replaced by `nop`, so it
+; needs no TX FIFO -- it free-runs as a pure clock source.
+
+.program i2s_clkgen
+.side_set 2
+
+.wrap_target
+    set x, 30          side 0b01    ; BCK rising edge for the previous right LSB
+left_loop:
+    nop                side 0b00    ; BCK low  (LRCK=0)
+    jmp x-- left_loop  side 0b01    ; BCK rising edge
+    nop                side 0b10    ; last left bit; lower-to-raise LRCK on BCK fall
+    set x, 30          side 0b11    ; BCK rising edge for the last left bit (LRCK=1)
+
+right_loop:
+    nop                side 0b10    ; BCK low  (LRCK=1)
+    jmp x-- right_loop side 0b11    ; BCK rising edge
+    nop                side 0b00    ; last right bit; raise-to-lower LRCK on BCK fall
+.wrap                               ; wrap to set: BCK rising edge for last right bit
+
+% c-sdk {
+static inline void i2s_clkgen_program_init(PIO pio, uint sm, uint offset, uint bclk_pin, float clkdiv) {
+    pio_sm_config c = i2s_clkgen_program_get_default_config(offset);
+    sm_config_set_sideset_pins(&c, bclk_pin);
+    sm_config_set_clkdiv(&c, clkdiv);
+
+    pio_gpio_init(pio, bclk_pin);
+    pio_gpio_init(pio, bclk_pin + 1);  // LRCK
+    pio_sm_set_consecutive_pindirs(pio, sm, bclk_pin, 2, true); // BCK, LRCK outputs
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
