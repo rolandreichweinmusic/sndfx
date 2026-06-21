@@ -6,28 +6,6 @@
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
 
-// ---------------------------------------------------------------------------
-// DIAGNOSTIC: set to 1 to run the ADC-liveness monitor; set to 0 for normal
-// passthrough. (Temporary confirmation aid for the slave-mode input bring-up.)
-//
-//   * You hear LIVE INPUT audio -> the ADC is capturing: the slave-mode input
-//     path works. Set this to 0 for plain passthrough.
-//   * You hear a STEADY tone -> no capture has completed: the input path is
-//     still not delivering samples (check the PCM1808 slave straps MD0/MD1 = GND
-//     and the BCK/LRCK/DOUT/SCKI wiring).
-// ---------------------------------------------------------------------------
-#define SNDFX_DAC_ADC_MONITOR 1
-
-// Defined in ADC.cpp: capture DMA completion count (0 => no samples captured yet).
-extern volatile uint32_t g_adcCaptureCompletions;
-
-namespace {
-// ~1 kHz square wave at 48 kHz: 24 samples high + 24 low = 48-sample period.
-// Amplitude is well below full scale (2^31) to stay at a safe listening level.
-constexpr Operation::SampleType kToneAmplitude = 1 << 26; // ~ -30 dBFS
-constexpr unsigned kToneHalfPeriod = 24;
-} // namespace
-
 DAC* DAC::_instance = nullptr;
 
 DAC::DAC(Operation& input, PIO pio, uint sm, uint data_pin, uint bclk_pin)
@@ -152,23 +130,6 @@ void DAC::process() {
     const unsigned idx = _freeIndex;
     _freeReady = false;
     StereoBuffer& dst = _stereo[idx];
-
-#if SNDFX_DAC_ADC_MONITOR
-    if (g_adcCaptureCompletions == 0) {
-        // No captures yet -> emit a steady tone so a non-delivering input path
-        // is audibly distinct from captured silence. Flips to passthrough below
-        // the instant the first capture DMA completes.
-        static unsigned tonePhase = 0;
-        for (size_t i = 0; i < bufferSize; ++i) {
-            const SampleType s = (tonePhase < kToneHalfPeriod) ? kToneAmplitude : -kToneAmplitude;
-            if (++tonePhase >= 2 * kToneHalfPeriod)
-                tonePhase = 0;
-            dst[2 * i]     = s;
-            dst[2 * i + 1] = s;
-        }
-        return;
-    }
-#endif
 
     // The pipeline carries one mono channel, but the PCM5102A is clocked for
     // stereo I2S (two 32-bit words per frame). Duplicate each mono sample into

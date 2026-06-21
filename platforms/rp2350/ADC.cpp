@@ -9,11 +9,6 @@
 
 ADC* ADC::_instance = nullptr;
 
-// Liveness flag (read by DAC.cpp): number of completed capture DMAs. While this
-// stays 0 the input path has produced no samples yet; the DAC plays a tone so a
-// non-capturing input is audibly distinct from captured silence.
-volatile uint32_t g_adcCaptureCompletions = 0;
-
 ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
          PIO clk_pio, uint clk_sm)
     : _pio(pio), _sm(sm) {
@@ -155,7 +150,6 @@ void ADC::onDmaComplete() {
     _captureIndex = next;
     _readyIndex = filled;
     _readyValid = true;
-    g_adcCaptureCompletions = g_adcCaptureCompletions + 1;
 }
 
 void ADC::process() {
