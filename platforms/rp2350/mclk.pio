@@ -1,0 +1,39 @@
+; Master clock (SCKI) generator for the PCM1808
+;
+; The PCM1808 runs in master mode and derives BCK and LRCK by dividing its
+; system clock input (SCKI). For fs = 48 kHz at 256 fs, SCKI = 12.288 MHz.
+;
+; Pin mapping:
+;   Side-set pin 0: SCKI (system clock output to the PCM1808)
+;
+; The loop is two instructions -- one cycle high, one cycle low -- so it emits a
+; 50% duty square wave at half the state-machine clock. The caller therefore
+; sets the clock divider so the state machine runs at 2 x SCKI = 24.576 MHz.
+;
+; Note: a 12 MHz crystal cannot synthesise 12.288 MHz exactly through the PLL,
+; so the divider is fractional and SCKI carries a small (~0.03%) frequency
+; offset plus some jitter. The PCM1808 (via SCKI) and the PCM5102A (via clk_sys)
+; both derive their timing from clk_sys, so the ADC and DAC sample rates stay
+; locked to each other regardless of the absolute value.
+
+.program mclk
+.side_set 1
+
+.wrap_target
+    nop side 1
+    nop side 0
+.wrap
+
+% c-sdk {
+static inline void mclk_program_init(PIO pio, uint sm, uint offset, uint pin, float div) {
+    pio_sm_config c = mclk_program_get_default_config(offset);
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true); // SCKI out
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

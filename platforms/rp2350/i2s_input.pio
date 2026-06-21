@@ -1,30 +1,41 @@
-; I2S input PIO program for PCM1808
-; Reads 32-bit samples synchronized to external BCLK and LRCLK
+; I2S input PIO program for PCM1808 (Philips I2S format)
+; Reads one 32-bit slot per frame, synchronized to the BCLK and LRCLK that the
+; PCM1808 generates externally in master mode.
 ;
 ; Pin mapping:
-;   IN pin 0: data (SD)
-;   JMP pin:  LRCLK (word select)
-;   GPIO:     BCLK (bit clock) - used via wait
+;   IN pin 0:   data (DOUT/SD)
+;   WAIT pin 1: BCLK (bit clock)   -- data_pin + 1
+;   JMP pin:    LRCLK (word select)-- data_pin + 2
 ;
-; The PCM1808 provides BCLK and LRCLK externally.
-; This program waits for LRCLK low (left channel), then clocks in 32 bits
-; on each BCLK rising edge.
+; Philips I2S places the MSB one BCLK period AFTER the LRCLK edge (the "1-bit
+; delay"). LRCLK changes on a falling BCLK edge; the first rising edge inside the
+; new slot carries the delayed/previous bit and must be discarded, so the MSB is
+; latched on the SECOND rising edge after the LRCLK transition. This program
+; implements that delay explicitly. (Left-justified format has no delay and would
+; instead latch the MSB on the first rising edge.)
+;
+; Only the left channel is captured; the right channel slot is skipped.
 
 .program i2s_input
 
 ; Wait for LRCLK to go low (left channel start)
 wait_left:
-    jmp pin wait_left       ; loop while LRCLK is high
+    jmp pin wait_left       ; loop while LRCLK is high; fall through when low
 
-; Read 32 bits, one per BCLK rising edge
 .wrap_target
+    ; I2S 1-bit delay: discard the first bit slot after the LRCLK edge, before
+    ; the MSB appears on the data line.
+    wait 0 pin 1           ; BCLK low
+    wait 1 pin 1           ; BCLK high -- delay bit, not shifted in
+
+    ; Read the 32-bit slot, MSB first, one bit per BCLK rising edge.
     set x, 31              ; 32 bits to read
 bitloop:
     wait 0 pin 1           ; wait for BCLK low (BCLK is data_pin+1)
     wait 1 pin 1           ; wait for BCLK high (sample on rising edge)
-    in pins, 1             ; shift in data bit
+    in pins, 1             ; shift in data bit (MSB first)
     jmp x-- bitloop        ; loop for all 32 bits
-    jmp pin wait_left      ; if LRCLK high again, re-sync
+    jmp pin wait_left      ; LRCLK now high (right channel) -> re-sync
 .wrap
 
 % c-sdk {

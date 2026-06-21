@@ -7,7 +7,8 @@
 class ADC : public Operation
 {
 public:
-    ADC(PIO pio = pio0, uint sm = 0, uint data_pin = 16, uint bclk_pin = 17, uint lrclk_pin = 18);
+    ADC(PIO pio = pio0, uint sm = 0, uint data_pin = 2, uint bclk_pin = 3, uint lrclk_pin = 4,
+        uint sck_pin = 5, uint sck_sm = 1);
     void process() override;
 
 private:

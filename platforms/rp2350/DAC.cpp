@@ -1,3 +1,5 @@
+// PCM5102A
+
 #include "DAC.h"
 #include "i2s_output.pio.h"
 #include "hardware/dma.h"
@@ -8,11 +10,15 @@ DAC::DAC(Operation& input, PIO pio, uint sm, uint data_pin, uint bclk_pin)
     // Load PIO program
     _offset = pio_add_program(_pio, &i2s_output_program);
 
-    // Configure PIO state machine for I2S output
+    // Configure PIO state machine for I2S output.
+    // Philips I2S format: data is shifted out MSB-first within a 32-bit slot,
+    // with the MSB delayed one BCLK after the LRCLK edge. That 1-bit delay is
+    // produced inside the PIO program (i2s_output.pio); here we only set the
+    // pins, shift direction and width.
     pio_sm_config c = i2s_output_program_get_default_config(_offset);
     sm_config_set_out_pins(&c, data_pin, 1);
     sm_config_set_sideset_pins(&c, bclk_pin);
-    sm_config_set_out_shift(&c, false, true, 32); // shift left, autopull, 32 bits
+    sm_config_set_out_shift(&c, false, true, 32); // shift left (MSB-first), autopull at 32 bits
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
 
     // Configure pins

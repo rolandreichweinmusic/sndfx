@@ -7,7 +7,7 @@
 class DAC : public Operation
 {
 public:
-    DAC(Operation& input, PIO pio = pio1, uint sm = 0, uint data_pin = 19, uint bclk_pin = 20);
+    DAC(Operation& input, PIO pio = pio1, uint sm = 0, uint data_pin = 26, uint bclk_pin = 27);
     void process() override;
 
 private:

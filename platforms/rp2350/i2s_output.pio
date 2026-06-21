@@ -1,28 +1,40 @@
-; I2S output PIO program for PCM5102A
-; Writes 32-bit samples synchronized to self-generated BCLK and LRCLK
+; I2S output PIO program for PCM5102A (Philips I2S format)
+; Generates BCLK and LRCLK and shifts one 32-bit slot per channel, MSB first.
 ;
 ; Pin mapping:
 ;   OUT pin 0:      data (DIN)
 ;   Side-set pin 0: BCLK
 ;   Side-set pin 1: LRCLK (directly follows BCLK pin)
+;   Side-set value is 0bWB: bit1 = LRCLK (W), bit0 = BCLK (B).
 ;
-; The RP2350 generates BCLK and LRCLK for the PCM5102A.
-; Data is shifted out MSB first on the falling edge of BCLK.
+; The RP2350 generates BCLK and LRCLK for the PCM5102A. Data changes while BCLK
+; is low and is sampled by the DAC on the BCLK rising edge.
+;
+; Philips I2S places the MSB one BCLK period AFTER the LRCLK edge (the "1-bit
+; delay"): LRCLK changes on a falling BCLK edge, and the new word's MSB is only
+; clocked out on the following bit. This program flips LRCLK during the LAST bit
+; of the opposite channel, so each channel's MSB appears one BCLK after the
+; LRCLK transition. (Left-justified format would flip LRCLK coincident with the
+; MSB instead.)
 
 .program i2s_output
 .side_set 2
 
-; Left channel: LRCLK low
-    set x, 31          side 0b00    ; 32 bits, BCLK=0 LRCLK=0
+.wrap_target
+    ; Left channel (LRCLK=0). LRCLK was driven low during the previous right
+    ; channel's last bit, giving the I2S 1-bit delay ahead of this MSB.
+    set x, 30          side 0b01    ; BCLK rising edge for the previous right LSB
 left_loop:
-    out pins, 1        side 0b00    ; output data bit, BCLK=0
-    jmp x-- left_loop  side 0b01   ; clock rising edge, BCLK=1 LRCLK=0
+    out pins, 1        side 0b00    ; present data bit, BCLK low
+    jmp x-- left_loop  side 0b01    ; BCLK rising edge (DAC samples)
+    out pins, 1        side 0b10    ; last left bit; raise LRCLK now (1-bit delay)
+    set x, 30          side 0b11    ; BCLK rising edge for the last left bit
 
-; Right channel: LRCLK high
-    set x, 31          side 0b10    ; 32 bits, BCLK=0 LRCLK=1
 right_loop:
-    out pins, 1        side 0b10    ; output data bit, BCLK=0
-    jmp x-- right_loop side 0b11   ; clock rising edge, BCLK=1 LRCLK=1
+    out pins, 1        side 0b10    ; present data bit, BCLK low
+    jmp x-- right_loop side 0b11    ; BCLK rising edge (DAC samples)
+    out pins, 1        side 0b00    ; last right bit; lower LRCLK now (1-bit delay)
+.wrap                               ; wrap to set: BCLK rising edge for last right bit
 
 % c-sdk {
 static inline void i2s_output_program_init(PIO pio, uint sm, uint offset, uint data_pin, uint bclk_pin) {
