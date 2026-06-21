@@ -47,20 +47,8 @@ bitloop:
     jmp pin wait_left      ; LRCLK now high (right channel) -> re-sync
 .wrap
 
-% c-sdk {
-static inline void i2s_input_program_init(PIO pio, uint sm, uint offset, uint data_pin) {
-    pio_sm_config c = i2s_input_program_get_default_config(offset);
-    sm_config_set_in_pins(&c, data_pin);
-    sm_config_set_in_shift(&c, false, true, 32);
-    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
-    sm_config_set_jmp_pin(&c, data_pin + 2); // LRCLK
-    sm_config_set_clkdiv(&c, 1.0f);
-
-    pio_gpio_init(pio, data_pin);
-    pio_gpio_init(pio, data_pin + 1);
-    pio_gpio_init(pio, data_pin + 2);
-    pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 3, false);
-
-    pio_sm_init(pio, sm, offset, &c);
-}
-%}
+; No `% c-sdk` init helper on purpose. The state machine is configured directly
+; in ADC.cpp, which only claims DOUT (data_pin) as an input: BCK and LRCK are
+; driven by the separate clock generator (i2s_clkgen.pio), so this program must
+; NOT set their pindirs as inputs. A generated helper that did so (the usual
+; template) would fight the clock generator -- hence it is omitted here.

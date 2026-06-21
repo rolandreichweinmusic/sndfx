@@ -6,12 +6,25 @@
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
+#include "pico/assert.h"
 
 ADC* ADC::_instance = nullptr;
 
 ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
          PIO clk_pio, uint clk_sm)
     : _pio(pio), _sm(sm) {
+    // Pin-layout invariants. Capture only works if the GPIOs line up so the
+    // input SM reads back exactly the clocks the generator drives:
+    //   * the input program reads BCK via `wait pin 1` (IN-base + 1 =
+    //     data_pin + 1), while the clock generator drives BCK on bclk_pin,
+    //     so bclk_pin must equal data_pin + 1;
+    //   * the input program's jmp pin (lrclk_pin) must be the generator's LRCK,
+    //     which sits at bclk_pin + 1.
+    // SCKI is then bclk_pin + 2. Violating either relation breaks capture
+    // silently (no error, just garbled or absent samples), so check it here
+    // rather than letting a future pin change fail mysteriously.
+    hard_assert(bclk_pin == data_pin + 1);
+    hard_assert(lrclk_pin == bclk_pin + 1);
     // The PCM1808 runs in SLAVE mode: the RP2350 is the I2S clock master for the
     // input path and generates SCKI, BCK and LRCK itself. Crucially, all three
     // come from a SINGLE state machine (see i2s_clkgen.pio), so they are exactly
