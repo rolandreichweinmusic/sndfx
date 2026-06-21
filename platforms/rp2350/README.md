@@ -91,7 +91,8 @@ so no external system clock (SCKI) is required:
 | SCK          | System clock input            | GND (enables internal PLL)          |
 | FMT          | Audio data format select      | GND (I2S format)                    |
 | XSMT         | Soft mute (active low)        | 3.3 V (un-muted)                    |
-| FLT/DEMP     | Filter / de-emphasis select   | GND (normal latency / off)          |
+| FLT          | Low latency filter            | 3.3V (low latency)                  |
+| DEMP         | De-emphasis select            | GND (off)                           |
 
 ### Power and analog
 
