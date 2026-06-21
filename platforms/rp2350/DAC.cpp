@@ -168,9 +168,12 @@ void DAC::process() {
         const unsigned code = g_adcClockDiag;
         bool toneOn = true;
         if (code != 0) {
-            constexpr unsigned beepFrames = 8;  // ~21 ms tone burst
-            constexpr unsigned gapFrames  = 8;  // ~21 ms gap between beeps
-            constexpr unsigned groupGap   = 32; // ~85 ms gap between groups
+            // Slow, widely-spaced beeps so the count per group is unmistakable:
+            // a long (~1.5 s) silence separates the repeating groups, while
+            // beeps inside a group are only ~200 ms apart (frame ~2.67 ms).
+            constexpr unsigned beepFrames = 45;  // ~120 ms tone burst
+            constexpr unsigned gapFrames  = 75;  // ~200 ms gap between beeps in a group
+            constexpr unsigned groupGap   = 560; // ~1.5 s gap between groups
             const unsigned slot = beepFrames + gapFrames;
             const unsigned cycle = code * slot + groupGap;
             static unsigned frameCtr = 0;
