@@ -3,7 +3,6 @@
 #include "ADC.h"
 #include "i2s_input.pio.h"
 #include "i2s_clkgen.pio.h"
-#include "mclk.pio.h"
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
@@ -16,35 +15,29 @@ ADC* ADC::_instance = nullptr;
 volatile uint32_t g_adcCaptureCompletions = 0;
 
 ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
-         uint sck_pin, uint sck_sm, uint clk_sm)
+         uint clk_sm)
     : _pio(pio), _sm(sm) {
     // The PCM1808 runs in SLAVE mode: the RP2350 is the I2S clock master for the
-    // input path and drives BCK + LRCK itself (see i2s_clkgen.pio), so capture
-    // is framed by a deterministic, clk_sys-synchronous timebase rather than by
-    // the codec's own (jittery, PLL-less) master clock -- which made capture
-    // intermittent. The codec still needs SCKI; the mclk state machine supplies
-    // it as before.
+    // input path and generates SCKI, BCK and LRCK itself. Crucially, all three
+    // come from a SINGLE state machine (see i2s_clkgen.pio), so they are exactly
+    // phase-coherent at the 256 : 64 : 1 ratio the PCM1808's decimation filter
+    // requires. (Generating SCKI and BCK/LRCK from two independent state
+    // machines, each with its own fractional clk_sys divider, made the SCKI:LRCK
+    // ratio drift and the captured audio was heavily distorted.)
     //
-    // Derive the dividers from the *actual* system clock rather than assuming
+    // Derive the divider from the *actual* system clock rather than assuming
     // 150 MHz: if runtime_init_clocks ever brings clk_sys up at a different
     // frequency, a hardcoded constant would skew the clocks (and thus fs)
     // without any obvious symptom.
     const float sys_clk_hz = (float)clock_get_hz(clk_sys);
 
-    // SCKI = 256 * fs = 12.288 MHz for fs = 48 kHz. The mclk program toggles the
-    // pin once per instruction (two instructions per period), so the state
-    // machine runs at 2 * SCKI.
-    constexpr float scki_hz = 256.0f * 48000.0f; // 12.288 MHz
-    uint sck_offset = pio_add_program(_pio, &mclk_program);
-    mclk_program_init(_pio, sck_sm, sck_offset, sck_pin, sys_clk_hz / (2.0f * scki_hz));
-
-    // BCK = 64 * fs = 3.072 MHz, generated identically to the output path: the
-    // clkgen program runs at 2 * BCK (two instructions per bit) so the divider
-    // matches DAC.cpp. BCK is on bclk_pin (GPIO3) and LRCK on bclk_pin + 1
-    // (GPIO4); both are driven as outputs to the PCM1808. SCKI and BCK/LRCK are
-    // both derived from clk_sys (frequency-locked), so SCKI jitter now only
-    // affects ADC SNR, not framing.
-    const float i2s_clkdiv = sys_clk_hz / (48000.0f * 64.0f * 2.0f);
+    // The clkgen SM emits a 514-cycle frame (two 257-cycle halves: a 1-cycle
+    // counter preload + 32 eight-cycle BCK cells). Clocking the SM at 514 * fs
+    // therefore makes LRCK land on exactly fs and SCKI on exactly 256 * fs (by
+    // edge count per frame). BCK = 64 * fs and SCKI = 256 * fs are emitted on
+    // bclk_pin..bclk_pin+2 (GPIO3 = BCK, GPIO4 = LRCK, GPIO5 = SCKI).
+    constexpr float frame_cycles = 514.0f;
+    const float i2s_clkdiv = sys_clk_hz / (frame_cycles * 48000.0f);
     uint clk_offset = pio_add_program(_pio, &i2s_clkgen_program);
     i2s_clkgen_program_init(_pio, clk_sm, clk_offset, bclk_pin, i2s_clkdiv);
 

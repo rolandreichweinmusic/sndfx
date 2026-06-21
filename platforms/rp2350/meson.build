@@ -103,13 +103,6 @@ i2s_clkgen_pio_h = custom_target('i2s_clkgen_pio_h',
     command: [pioasm, '-o', 'c-sdk', '@INPUT@', '@OUTPUT@'],
 )
 
-# PCM1808 master clock (SCKI) generator.
-mclk_pio_h = custom_target('mclk_pio_h',
-    input: 'mclk.pio',
-    output: 'mclk.pio.h',
-    command: [pioasm, '-o', 'c-sdk', '@INPUT@', '@OUTPUT@'],
-)
-
 rp2350_inc = include_directories('.')
 
 # Pico SDK sources needed by our code
@@ -182,7 +175,6 @@ sndfx_rp2350 = executable('sndfx',
     i2s_input_pio_h,
     i2s_output_pio_h,
     i2s_clkgen_pio_h,
-    mclk_pio_h,
     include_directories: [common_inc, rp2350_inc, pico_inc],
     dependencies: [etl_dep],
     link_whole: pico_support,

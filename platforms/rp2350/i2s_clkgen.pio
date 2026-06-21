@@ -1,52 +1,77 @@
-; I2S clock generator for the PCM1808 in SLAVE mode (Philips I2S format)
+; Unified I2S clock generator for the PCM1808 in SLAVE mode (Philips I2S format)
 ;
-; The RP2350 is the I2S clock master for the input path: this program drives a
-; continuous BCK + LRCK so the PCM1808 (strapped for slave mode) clocks its data
-; out on a clean, deterministic timebase derived from clk_sys. The input PIO
-; (i2s_input.pio) then samples DOUT relative to these same clocks.
+; ONE state machine generates all three input clocks -- SCKI, BCK and LRCK -- so
+; they are inherently phase-coherent at the exact 256 : 64 : 1 ratio the PCM1808
+; requires. This is the whole point of the program.
 ;
-; Why this exists: in master mode the PCM1808 generated BCK/LRCK from its own
-; (jittery, fractional-divider) SCKI, and capture was intermittent. The PCM1808
-; has no PLL to clean SCKI, so its master clock output sat at the margin of what
-; the RP2350 input PIO could reliably sample. Driving BCK/LRCK from the RP2350
-; instead makes the input framing synchronous to clk_sys and deterministic.
+; Why a single SM (the distortion fix): SCKI and BCK/LRCK were previously made by
+; two independent SMs (mclk + a BCK/LRCK generator), each with its own fractional
+; clk_sys divider. The PCM1808 has no PLL; in slave mode its decimation filter
+; assumes SCKI = 256 * LRCK *synchronously*. Two independent fractional dividers
+; only match on average and drift against each other, so the SCKI:LRCK ratio is
+; not exactly 256 instant-to-instant -- the converter's framing slips and the
+; audio is heavily distorted. Deriving every clock from one SM makes the ratio
+; exact by construction: all three are integer counts of the same SM cycle, so
+; any divider jitter shifts them together and the ratio never changes.
 ;
-; Pin mapping (side-set, 2 bits, value 0bWB):
-;   Side-set pin 0: BCK   (bit0 = B)
-;   Side-set pin 1: LRCK  (bit1 = W) -- directly follows BCK pin
+; Pin mapping (side-set, 3 bits, consecutive GPIOs from bclk_pin):
+;   Side-set bit 0: BCK   (bclk_pin,     GPIO3)
+;   Side-set bit 1: LRCK  (bclk_pin + 1, GPIO4)
+;   Side-set bit 2: SCKI  (bclk_pin + 2, GPIO5)
 ;
-; The BCK/LRCK waveform is intentionally IDENTICAL to the proven output path
-; (i2s_output.pio): 32 BCK per channel, LRCK toggling on a BCK falling edge so
-; each channel's MSB lands one BCK after the LRCK edge (the I2S 1-bit delay).
-; This is the output program with every data `out` replaced by `nop`, so it
-; needs no TX FIFO -- it free-runs as a pure clock source.
+; Timebase: the SM runs at 2 * SCKI so SCKI toggles every instruction. One BCK
+; bit = 4 SCKI periods = 8 SM cycles ("cell"); one LRCK period = 64 BCK bits =
+; 512 SM cycles. Each half (32 cells, one LRCK level) is a counted 8-cycle loop.
+; A single `set x` preludes each half (2 extra cycles per frame); the ADC sets
+; the SM divider for a 514-cycle frame so LRCK lands on exactly fs = 48 kHz and
+; SCKI on exactly 256 * fs by count. Those 2 set cycles only stretch two SCKI
+; half-periods slightly -- the 256:64:1 ratio stays exact -- which the codec's
+; delta-sigma modulator tolerates easily (unlike a wrong ratio).
+;
+; Philips phase: each cell is BCK low for 4 SM cycles then BCK high for 4, and
+; LRCK flips at the half boundary, i.e. on a BCK falling edge -- exactly what the
+; input sampler (i2s_input.pio) expects (LRCK low = left, MSB delayed one BCK).
 
 .program i2s_clkgen
-.side_set 2
+.side_set 3                          ; bit2 = SCKI, bit1 = LRCK, bit0 = BCK
 
 .wrap_target
-    set x, 30          side 0b01    ; BCK rising edge for the previous right LSB
-left_loop:
-    nop                side 0b00    ; BCK low  (LRCK=0)
-    jmp x-- left_loop  side 0b01    ; BCK rising edge
-    nop                side 0b10    ; last left bit; lower-to-raise LRCK on BCK fall
-    set x, 30          side 0b11    ; BCK rising edge for the last left bit (LRCK=1)
+    ; ---- Left half: LRCK = 0, 32 BCK cells ----
+    set x, 31          side 0b100    ; preload cell counter; SCKI=1 LRCK=0 BCK=0
+lcell:
+    nop                side 0b000    ; SCKI=0 BCK=0
+    nop                side 0b100    ; SCKI=1 BCK=0
+    nop                side 0b000    ; SCKI=0 BCK=0
+    nop                side 0b101    ; SCKI=1 BCK=1
+    nop                side 0b001    ; SCKI=0 BCK=1
+    nop                side 0b101    ; SCKI=1 BCK=1
+    jmp x-- lcell      side 0b001    ; SCKI=0 BCK=1 ; next cell (LRCK falls at end)
 
-right_loop:
-    nop                side 0b10    ; BCK low  (LRCK=1)
-    jmp x-- right_loop side 0b11    ; BCK rising edge
-    nop                side 0b00    ; last right bit; raise-to-lower LRCK on BCK fall
-.wrap                               ; wrap to set: BCK rising edge for last right bit
+    ; ---- Right half: LRCK = 1, 32 BCK cells ----
+    set x, 31          side 0b110    ; preload cell counter; SCKI=1 LRCK=1 BCK=0
+rcell:
+    nop                side 0b010    ; SCKI=0 LRCK=1 BCK=0
+    nop                side 0b110    ; SCKI=1 LRCK=1 BCK=0
+    nop                side 0b010    ; SCKI=0 LRCK=1 BCK=0
+    nop                side 0b111    ; SCKI=1 LRCK=1 BCK=1
+    nop                side 0b011    ; SCKI=0 LRCK=1 BCK=1
+    nop                side 0b111    ; SCKI=1 LRCK=1 BCK=1
+    jmp x-- rcell      side 0b011    ; SCKI=0 LRCK=1 BCK=1 ; next cell (LRCK rises at wrap)
+.wrap
 
 % c-sdk {
+// Drives BCK, LRCK and SCKI on three consecutive GPIOs starting at bclk_pin.
+// clkdiv should set the SM clock to 514 * fs (see ADC.cpp) so the 514-cycle
+// frame yields exactly fs at LRCK and 256 * fs at SCKI.
 static inline void i2s_clkgen_program_init(PIO pio, uint sm, uint offset, uint bclk_pin, float clkdiv) {
     pio_sm_config c = i2s_clkgen_program_get_default_config(offset);
     sm_config_set_sideset_pins(&c, bclk_pin);
     sm_config_set_clkdiv(&c, clkdiv);
 
-    pio_gpio_init(pio, bclk_pin);
+    pio_gpio_init(pio, bclk_pin);      // BCK
     pio_gpio_init(pio, bclk_pin + 1);  // LRCK
-    pio_sm_set_consecutive_pindirs(pio, sm, bclk_pin, 2, true); // BCK, LRCK outputs
+    pio_gpio_init(pio, bclk_pin + 2);  // SCKI
+    pio_sm_set_consecutive_pindirs(pio, sm, bclk_pin, 3, true); // BCK, LRCK, SCKI outputs
 
     pio_sm_init(pio, sm, offset, &c);
     pio_sm_set_enabled(pio, sm, true);

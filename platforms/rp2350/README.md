@@ -39,10 +39,15 @@ resolution is 24-bit.
 
 ### Clock and mode pins
 
-The PCM1808 still needs a system clock (SCKI). The RP2350 generates SCKI with a
-dedicated PIO state machine (see [mclk.pio](mclk.pio) and [ADC.cpp](ADC.cpp)), so
-no external oscillator is needed. In slave mode the codec accepts BCK/LRCK as
-inputs and auto-detects the SCKI ratio:
+The RP2350 generates all three input clocks -- SCKI, BCK and LRCK -- from a
+**single PIO state machine** (see [i2s_clkgen.pio](i2s_clkgen.pio) and
+[ADC.cpp](ADC.cpp)), so no external oscillator is needed. Using one state machine
+is essential: the PCM1808 has no PLL, and in slave mode its decimation filter
+requires SCKI to be an exact, phase-coherent 256x multiple of LRCK. Deriving all
+three clocks from one state machine makes that ratio exact by construction. (An
+earlier design generated SCKI and BCK/LRCK from two independent state machines
+with separate fractional dividers; their ratio drifted and the captured audio
+was heavily distorted.)
 
 | PCM1808 pin | Purpose                          | Connection                              |
 | ----------- | -------------------------------- | --------------------------------------- |
@@ -65,13 +70,16 @@ inputs and auto-detects the SCKI ratio:
 
 > Note: the audio pipeline runs at **fs = 48 kHz** with 32-bit I2S frames
 > (32 bits left + 32 bits right), so BCK = 64 fs = 3.072 MHz and SCKI = 256 fs =
-> 12.288 MHz. The RP2350 generates both: a `pio0` state machine drives BCK/LRCK
-> on GPIO3/GPIO4 (same divider as the DAC output path), and another toggles
-> GPIO5 for SCKI. Because a 12 MHz crystal cannot reach 12.288 MHz exactly
-> through the PLL, the SCKI divider is fractional, giving a small (~0.03%)
-> frequency offset and some jitter; for best ADC SNR a dedicated low-jitter
-> 12.288 MHz oscillator on SCKI is preferable. BCK/LRCK (ADC and DAC) and SCKI
-> all derive from `clk_sys`, so every clock in the system stays frequency-locked.
+> 12.288 MHz. A single `pio0` state machine generates SCKI, BCK and LRCK together
+> on GPIO5/GPIO3/GPIO4, emitting a 514-cycle frame clocked at 514 fs; LRCK then
+> lands on exactly fs and SCKI on exactly 256 fs *by edge count*, with the
+> 256:64:1 ratio exact by construction. Because a 12 MHz crystal cannot reach
+> 12.288 MHz exactly through the PLL, the SM's clk_sys divider is fractional, so
+> the absolute clock has a little jitter (and two SCKI half-periods per frame are
+> slightly stretched by the counter preload); this affects only ADC SNR, never
+> the framing. For best ADC SNR a dedicated low-jitter 12.288 MHz (or 24.576 MHz)
+> oscillator feeding SCKI is preferable. All clocks derive from `clk_sys`, so the
+> ADC and DAC sample rates stay locked.
 
 ## PCM5102A DAC wiring
 
