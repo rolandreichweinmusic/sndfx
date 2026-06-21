@@ -6,6 +6,31 @@
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
 
+// ---------------------------------------------------------------------------
+// DIAGNOSTIC: set to 1 to emit a generated ~1 kHz tone and BYPASS the input
+// (ADC + Compressor) entirely; set to 0 for normal passthrough.
+//
+// Purpose: isolate the output chain (PIO -> DMA -> completion IRQ re-arm ->
+// PCM5102A -> XSMT/wiring/speaker) from the capture path. The main loop calls
+// input.process() first, which BLOCKS until the ADC DMA completes; if the
+// PCM1808 is not clocking, that wait never returns and only silence is ever
+// written to the DAC -- even when the DAC side is perfectly healthy. This mode
+// removes that dependency:
+//   * tone audible -> output chain is good; the fault is upstream (ADC/codec
+//     clocking or the passthrough), so debug capture next.
+//   * still silent -> fault is in the output chain or DAC hardware (clock not
+//     running, XSMT mute, wiring), so scope BCK/LRCK and check XSMT.
+// Revert to 0 once the fault is isolated.
+// ---------------------------------------------------------------------------
+#define SNDFX_DAC_TEST_TONE 1
+
+namespace {
+// ~1 kHz square wave at 48 kHz: 24 samples high + 24 low = 48-sample period.
+// Amplitude is well below full scale (2^31) to stay at a safe listening level.
+constexpr Operation::SampleType kToneAmplitude = 1 << 26; // ~ -30 dBFS
+constexpr unsigned kToneHalfPeriod = 24;
+} // namespace
+
 DAC* DAC::_instance = nullptr;
 
 DAC::DAC(Operation& input, PIO pio, uint sm, uint data_pin, uint bclk_pin)
@@ -109,8 +134,10 @@ void DAC::onDmaComplete() {
 }
 
 void DAC::process() {
+#if !SNDFX_DAC_TEST_TONE
     input.process();
     const BufferType& samples = input.getBuffer();
+#endif
 
     // Wait until the ISR releases the buffer that is not currently playing.
     // This blocking wait paces the loop to the DAC's frame rate; the DMA keeps
@@ -122,6 +149,18 @@ void DAC::process() {
     _freeReady = false;
     StereoBuffer& dst = _stereo[idx];
 
+#if SNDFX_DAC_TEST_TONE
+    // Diagnostic: synthesise a square wave straight into both slots, ignoring
+    // the input so a stuck ADC cannot mask an otherwise-working output chain.
+    static unsigned tonePhase = 0;
+    for (size_t i = 0; i < bufferSize; ++i) {
+        const SampleType s = (tonePhase < kToneHalfPeriod) ? kToneAmplitude : -kToneAmplitude;
+        if (++tonePhase >= 2 * kToneHalfPeriod)
+            tonePhase = 0;
+        dst[2 * i]     = s;
+        dst[2 * i + 1] = s;
+    }
+#else
     // The pipeline carries one mono channel, but the PCM5102A is clocked for
     // stereo I2S (two 32-bit words per frame). Duplicate each mono sample into
     // the left and right slots so both outputs carry the same audio and the
@@ -130,4 +169,5 @@ void DAC::process() {
         dst[2 * i]     = samples[i];
         dst[2 * i + 1] = samples[i];
     }
+#endif
 }
