@@ -104,3 +104,10 @@ so no external system clock (SCKI) is required:
 
 > Note: the audio pipeline runs at **fs = 48 kHz** with 32-bit I2S frames
 > (32 bits left + 32 bits right), giving BCK = 48000 × 64 = 3.072 MHz.
+>
+> The DSP pipeline is **mono** — the PCM1808 ADC captures only the left I2S
+> slot. Because the PCM5102A is clocked for stereo I2S (two 32-bit words per
+> frame), [DAC.cpp](DAC.cpp) duplicates each mono sample into the left and
+> right slots, so both analog outputs carry the same signal and exactly one
+> input sample is consumed per output frame (ADC and DAC sample rates stay
+> matched).

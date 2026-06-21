@@ -51,8 +51,8 @@ DAC::DAC(Operation& input, PIO pio, uint sm, uint data_pin, uint bclk_pin)
         _dma_chan,
         &dma_cfg,
         &_pio->txf[_sm],          // write to PIO TX FIFO
-        _buffer.data(),           // read from buffer
-        _buffer.size(),           // transfer count
+        _stereo.data(),           // read from stereo staging buffer
+        _stereo.size(),           // transfer count (two words per frame)
         false                     // don't start yet
     );
 
@@ -61,9 +61,18 @@ DAC::DAC(Operation& input, PIO pio, uint sm, uint data_pin, uint bclk_pin)
 
 void DAC::process() {
     input.process();
-    _buffer = input.getBuffer();
+    const BufferType& samples = input.getBuffer();
+
+    // The pipeline carries one mono channel, but the PCM5102A is clocked for
+    // stereo I2S (two 32-bit words per frame). Duplicate each mono sample into
+    // the left and right slots so both outputs carry the same audio and the
+    // DAC consumes exactly one input sample per frame.
+    for (size_t i = 0; i < samples.size(); ++i) {
+        _stereo[2 * i]     = samples[i];
+        _stereo[2 * i + 1] = samples[i];
+    }
 
     // Start DMA transfer and wait for completion
-    dma_channel_set_read_addr(_dma_chan, _buffer.data(), true);
+    dma_channel_set_read_addr(_dma_chan, _stereo.data(), true);
     dma_channel_wait_for_finish_blocking(_dma_chan);
 }
