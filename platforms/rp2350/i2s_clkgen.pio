@@ -20,49 +20,70 @@
 ;   Side-set bit 2: SCKI  (bclk_pin + 2, GPIO5)
 ;
 ; Timebase: the SM runs at 2 * SCKI so SCKI toggles every instruction. One BCK
-; bit = 4 SCKI periods = 8 SM cycles ("cell"); one LRCK period = 64 BCK bits =
-; 512 SM cycles. Each half (32 cells, one LRCK level) is a counted 8-cycle loop.
-; A single `set x` preludes each half (2 extra cycles per frame); the ADC sets
-; the SM divider for a 514-cycle frame so LRCK lands on exactly fs = 48 kHz and
-; SCKI on exactly 256 * fs by count. Those 2 set cycles only stretch two SCKI
-; half-periods slightly -- the 256:64:1 ratio stays exact -- which the codec's
-; delta-sigma modulator tolerates easily (unlike a wrong ratio).
+; bit = 4 SCKI periods = 8 SM cycles; one LRCK period = 64 BCK bits = 512 SM
+; cycles. The frame MUST be exactly 512 SM cycles -- that is what makes
+; SCKI : BCK : LRCK = 256 : 64 : 1 exact. Any off-by-one (e.g. an un-absorbed
+; counter reload) makes SCKI a non-integer multiple of fs and the PCM1808's
+; decimation produces silence/garbage.
 ;
-; Philips phase: each cell is BCK low for 4 SM cycles then BCK high for 4, and
-; LRCK flips at the half boundary, i.e. on a BCK falling edge -- exactly what the
-; input sampler (i2s_input.pio) expects (LRCK low = left, MSB delayed one BCK).
+; To hit 512 with no overhead, each 256-cycle half is one bit emitted inline
+; (8 cycles, whose first cycle is the `set x` counter reload) followed by a
+; 31-iteration loop of one 8-cycle bit (31 * 8 = 248); 8 + 248 = 256 exactly.
+;
+; Philips phase: within each 8-cycle bit, BCK is low for 4 cycles then high for
+; 4; LRCK flips at the half boundary, i.e. on a BCK falling edge -- exactly what
+; the input sampler (i2s_input.pio) expects (LRCK low = left, MSB delayed 1 BCK).
+;
+; Side-set value is 0b(SCKI)(LRCK)(BCK): bit2 = SCKI, bit1 = LRCK, bit0 = BCK.
 
 .program i2s_clkgen
-.side_set 3                          ; bit2 = SCKI, bit1 = LRCK, bit0 = BCK
+.side_set 3
 
 .wrap_target
-    ; ---- Left half: LRCK = 0, 32 BCK cells ----
-    set x, 31          side 0b100    ; preload cell counter; SCKI=1 LRCK=0 BCK=0
-lcell:
-    nop                side 0b000    ; SCKI=0 BCK=0
-    nop                side 0b100    ; SCKI=1 BCK=0
-    nop                side 0b000    ; SCKI=0 BCK=0
-    nop                side 0b101    ; SCKI=1 BCK=1
-    nop                side 0b001    ; SCKI=0 BCK=1
-    nop                side 0b101    ; SCKI=1 BCK=1
-    jmp x-- lcell      side 0b001    ; SCKI=0 BCK=1 ; next cell (LRCK falls at end)
+    ; ===== Left half: LRCK = 0, 32 BCK bits = 256 cycles =====
+    set x, 30          side 0b100   ; bit0 c0: SCKI=1 BCK=0 ; x=30 -> 31 more bits
+    nop                side 0b000   ; bit0 c1: SCKI=0 BCK=0
+    nop                side 0b100   ; bit0 c2: SCKI=1 BCK=0
+    nop                side 0b000   ; bit0 c3: SCKI=0 BCK=0
+    nop                side 0b101   ; bit0 c4: SCKI=1 BCK=1
+    nop                side 0b001   ; bit0 c5: SCKI=0 BCK=1
+    nop                side 0b101   ; bit0 c6: SCKI=1 BCK=1
+    nop                side 0b001   ; bit0 c7: SCKI=0 BCK=1
+lbit:
+    nop                side 0b100   ; c0: SCKI=1 BCK=0
+    nop                side 0b000   ; c1: SCKI=0 BCK=0
+    nop                side 0b100   ; c2: SCKI=1 BCK=0
+    nop                side 0b000   ; c3: SCKI=0 BCK=0
+    nop                side 0b101   ; c4: SCKI=1 BCK=1
+    nop                side 0b001   ; c5: SCKI=0 BCK=1
+    nop                side 0b101   ; c6: SCKI=1 BCK=1
+    jmp x-- lbit       side 0b001   ; c7: SCKI=0 BCK=1 ; LRCK rises at the boundary
 
-    ; ---- Right half: LRCK = 1, 32 BCK cells ----
-    set x, 31          side 0b110    ; preload cell counter; SCKI=1 LRCK=1 BCK=0
-rcell:
-    nop                side 0b010    ; SCKI=0 LRCK=1 BCK=0
-    nop                side 0b110    ; SCKI=1 LRCK=1 BCK=0
-    nop                side 0b010    ; SCKI=0 LRCK=1 BCK=0
-    nop                side 0b111    ; SCKI=1 LRCK=1 BCK=1
-    nop                side 0b011    ; SCKI=0 LRCK=1 BCK=1
-    nop                side 0b111    ; SCKI=1 LRCK=1 BCK=1
-    jmp x-- rcell      side 0b011    ; SCKI=0 LRCK=1 BCK=1 ; next cell (LRCK rises at wrap)
+    ; ===== Right half: LRCK = 1, 32 BCK bits = 256 cycles =====
+    set x, 30          side 0b110   ; bit0 c0: SCKI=1 LRCK=1 BCK=0
+    nop                side 0b010   ; bit0 c1
+    nop                side 0b110   ; bit0 c2
+    nop                side 0b010   ; bit0 c3
+    nop                side 0b111   ; bit0 c4: BCK=1
+    nop                side 0b011   ; bit0 c5
+    nop                side 0b111   ; bit0 c6
+    nop                side 0b011   ; bit0 c7
+rbit:
+    nop                side 0b110   ; c0: SCKI=1 LRCK=1 BCK=0
+    nop                side 0b010   ; c1
+    nop                side 0b110   ; c2
+    nop                side 0b010   ; c3
+    nop                side 0b111   ; c4: BCK=1
+    nop                side 0b011   ; c5
+    nop                side 0b111   ; c6
+    jmp x-- rbit       side 0b011   ; c7 ; LRCK falls at the wrap boundary
 .wrap
 
 % c-sdk {
-// Drives BCK, LRCK and SCKI on three consecutive GPIOs starting at bclk_pin.
-// clkdiv should set the SM clock to 514 * fs (see ADC.cpp) so the 514-cycle
-// frame yields exactly fs at LRCK and 256 * fs at SCKI.
+// Drives BCK, LRCK and SCKI on three consecutive GPIOs starting at bclk_pin
+// (BCK = bclk_pin, LRCK = bclk_pin + 1, SCKI = bclk_pin + 2). The program is a
+// fixed 512-SM-cycle frame, so clocking the SM at 512 * fs (see ADC.cpp) yields
+// LRCK = fs, BCK = 64 fs and SCKI = 256 fs with those ratios exact.
 static inline void i2s_clkgen_program_init(PIO pio, uint sm, uint offset, uint bclk_pin, float clkdiv) {
     pio_sm_config c = i2s_clkgen_program_get_default_config(offset);
     sm_config_set_sideset_pins(&c, bclk_pin);

@@ -15,7 +15,7 @@ ADC* ADC::_instance = nullptr;
 volatile uint32_t g_adcCaptureCompletions = 0;
 
 ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
-         uint clk_sm)
+         PIO clk_pio, uint clk_sm)
     : _pio(pio), _sm(sm) {
     // The PCM1808 runs in SLAVE mode: the RP2350 is the I2S clock master for the
     // input path and generates SCKI, BCK and LRCK itself. Crucially, all three
@@ -25,21 +25,26 @@ ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
     // machines, each with its own fractional clk_sys divider, made the SCKI:LRCK
     // ratio drift and the captured audio was heavily distorted.)
     //
+    // The clock generator runs on its own PIO (clk_pio, default pio2): its frame
+    // is a full 512 instructions, which together with the 9-instruction input
+    // program would not fit in one PIO's 32-instruction memory. Pin state is
+    // global, so the input SM on `pio` reads BCK/LRCK back from the GPIOs that
+    // clk_pio drives.
+    //
     // Derive the divider from the *actual* system clock rather than assuming
     // 150 MHz: if runtime_init_clocks ever brings clk_sys up at a different
     // frequency, a hardcoded constant would skew the clocks (and thus fs)
     // without any obvious symptom.
     const float sys_clk_hz = (float)clock_get_hz(clk_sys);
 
-    // The clkgen SM emits a 514-cycle frame (two 257-cycle halves: a 1-cycle
-    // counter preload + 32 eight-cycle BCK cells). Clocking the SM at 514 * fs
-    // therefore makes LRCK land on exactly fs and SCKI on exactly 256 * fs (by
-    // edge count per frame). BCK = 64 * fs and SCKI = 256 * fs are emitted on
-    // bclk_pin..bclk_pin+2 (GPIO3 = BCK, GPIO4 = LRCK, GPIO5 = SCKI).
-    constexpr float frame_cycles = 514.0f;
+    // The clkgen program is an exact 512-SM-cycle frame (two 256-cycle halves).
+    // Clocking the SM at 512 * fs therefore makes LRCK = fs, BCK = 64 * fs and
+    // SCKI = 256 * fs, with those ratios exact by construction. BCK/LRCK/SCKI are
+    // emitted on bclk_pin..bclk_pin+2 (GPIO3 = BCK, GPIO4 = LRCK, GPIO5 = SCKI).
+    constexpr float frame_cycles = 512.0f;
     const float i2s_clkdiv = sys_clk_hz / (frame_cycles * 48000.0f);
-    uint clk_offset = pio_add_program(_pio, &i2s_clkgen_program);
-    i2s_clkgen_program_init(_pio, clk_sm, clk_offset, bclk_pin, i2s_clkdiv);
+    uint clk_offset = pio_add_program(clk_pio, &i2s_clkgen_program);
+    i2s_clkgen_program_init(clk_pio, clk_sm, clk_offset, bclk_pin, i2s_clkdiv);
 
     // Load PIO program
     _offset = pio_add_program(_pio, &i2s_input_program);
