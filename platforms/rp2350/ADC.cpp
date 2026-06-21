@@ -5,6 +5,9 @@
 #include "mclk.pio.h"
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
+#include "hardware/irq.h"
+
+ADC* ADC::_instance = nullptr;
 
 ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
          uint sck_pin, uint sck_sm)
@@ -58,7 +61,11 @@ ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
 
     pio_sm_init(_pio, _sm, _offset, &c);
 
-    // Configure DMA
+    _instance = this;
+
+    // Configure DMA for continuous double-buffered capture. The channel fills
+    // one buffer, then the completion ISR re-arms it into the other, so the RX
+    // FIFO is drained without gaps and no samples are dropped.
     _dma_chan = dma_claim_unused_channel(true);
     dma_channel_config dma_cfg = dma_channel_get_default_config(_dma_chan);
     channel_config_set_transfer_data_size(&dma_cfg, DMA_SIZE_32);
@@ -69,17 +76,57 @@ ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
     dma_channel_configure(
         _dma_chan,
         &dma_cfg,
-        _buffer.data(),           // write to buffer
+        _capture[0].data(),       // write to the first capture buffer
         &_pio->rxf[_sm],          // read from PIO RX FIFO
-        _buffer.size(),           // transfer count
-        false                     // don't start yet
+        _capture[0].size(),       // transfer count
+        false                     // started below, after the IRQ is wired
     );
 
+    // Buffer 0 fills first; nothing is ready until the first completion.
+    _captureIndex = 0;
+    _readyIndex = 0;
+    _readyValid = false;
+
+    // Route this channel's completion to DMA_IRQ_0 and install the handler.
+    dma_channel_set_irq0_enabled(_dma_chan, true);
+    irq_set_exclusive_handler(DMA_IRQ_0, &ADC::dma_isr);
+    irq_set_enabled(DMA_IRQ_0, true);
+
+    // Arm capture, then enable the SM so samples flow into the RX FIFO.
+    dma_channel_start(_dma_chan);
     pio_sm_set_enabled(_pio, _sm, true);
 }
 
+void ADC::dma_isr() {
+    _instance->onDmaComplete();
+}
+
+void ADC::onDmaComplete() {
+    if (!dma_channel_get_irq0_status(_dma_chan))
+        return;
+    dma_channel_acknowledge_irq0(_dma_chan);
+
+    const unsigned filled = _captureIndex;
+    const unsigned next = filled ^ 1u;
+
+    // Re-arm immediately into the other buffer so the RX FIFO keeps draining.
+    // The FIFO bridges the few cycles of interrupt latency until this transfer
+    // takes over.
+    dma_channel_transfer_to_buffer_now(_dma_chan, _capture[next].data(), _capture[next].size());
+
+    _captureIndex = next;
+    _readyIndex = filled;
+    _readyValid = true;
+}
+
 void ADC::process() {
-    // Start DMA transfer and wait for completion
-    dma_channel_set_write_addr(_dma_chan, _buffer.data(), true);
-    dma_channel_wait_for_finish_blocking(_dma_chan);
+    // Block until the DMA has a freshly captured buffer, then publish it into
+    // the pipeline buffer returned by getBuffer(). The DMA fills the other
+    // buffer meanwhile, so capture continues without gaps.
+    while (!_readyValid)
+        tight_loop_contents();
+
+    const unsigned idx = _readyIndex;
+    _readyValid = false;
+    _buffer = _capture[idx];
 }

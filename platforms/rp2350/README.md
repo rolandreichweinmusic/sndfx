@@ -111,3 +111,14 @@ so no external system clock (SCKI) is required:
 > right slots, so both analog outputs carry the same signal and exactly one
 > input sample is consumed per output frame (ADC and DAC sample rates stay
 > matched).
+>
+> Both converters use **continuous double-buffered DMA**. The PCM5102A ties SCK
+> to GND and derives its internal clocks from BCK with its on-board PLL, so it
+> needs an **uninterrupted** bit clock: if BCK stalls, the PLL loses lock and
+> the codec mutes. Each DMA channel ([DAC.cpp](DAC.cpp), [ADC.cpp](ADC.cpp))
+> therefore ping-pongs between two buffers, re-armed from its completion
+> interrupt (DMA_IRQ_1 for the DAC, DMA_IRQ_0 for the ADC) with no CPU gap, so
+> the TX FIFO never empties and BCK/LRCK free-run. `process()` blocks on a flag
+> set by the ISR rather than on the DMA itself, which paces the loop to the
+> frame rate while the converters keep streaming. A one-shot, blocking DMA
+> stalls BCK between buffers and is heard as silence.
