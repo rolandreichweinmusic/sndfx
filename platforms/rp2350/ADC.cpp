@@ -6,6 +6,7 @@
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
+#include "hardware/gpio.h"
 
 ADC* ADC::_instance = nullptr;
 
@@ -14,6 +15,27 @@ ADC* ADC::_instance = nullptr;
 // and this never advances. Lets the DAC distinguish "input not clocking" from
 // "input clocking but data is zero".
 volatile uint32_t g_adcCaptureCompletions = 0;
+
+// Diagnostic (read by DAC.cpp): first dead link in the input clock chain.
+//   0 = SCKI, BCK and LRCK all toggle (clocks present)
+//   1 = SCKI (GPIO5) not toggling   -> RP2350 master-clock output dead/unwired
+//   2 = SCKI ok, BCK (GPIO3) static -> PCM1808 not producing clocks (MD0/MD1 straps, SCKI wire)
+//   3 = BCK ok, LRCK (GPIO4) static -> LRCK wiring
+volatile uint32_t g_adcClockDiag = 0;
+
+namespace {
+// Sample a pin many times; return true if it ever changes state. The window
+// (~10 ms at the -O0 build setting) spans hundreds of LRCK periods and many
+// thousands of BCK/SCKI periods, so any live clock is detected reliably.
+bool pinToggles(uint pin) {
+    const bool first = gpio_get(pin);
+    for (uint32_t i = 0; i < 300000; ++i) {
+        if (gpio_get(pin) != first)
+            return true;
+    }
+    return false;
+}
+} // namespace
 
 ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
          uint sck_pin, uint sck_sm)
@@ -108,6 +130,22 @@ ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
     // Arm capture, then enable the SM so samples flow into the RX FIFO.
     dma_channel_start(_dma_chan);
     pio_sm_set_enabled(_pio, _sm, true);
+
+    // ---- Diagnostic: detect which input clock (if any) is missing. ----
+    // SCKI has been generated since mclk_program_init() above; give the PCM1808
+    // a few ms to start dividing it into BCK/LRCK, then check each line. The
+    // first one found static identifies the broken link in the clock chain.
+    for (uint32_t s = 0; s < 200000; ++s) {
+        asm volatile("" ::: "memory"); // settle; barrier keeps the loop at -O0+
+    }
+    if (!pinToggles(sck_pin))
+        g_adcClockDiag = 1; // RP2350 SCKI output dead/unwired
+    else if (!pinToggles(bclk_pin))
+        g_adcClockDiag = 2; // PCM1808 not producing BCK (master straps / SCKI wire)
+    else if (!pinToggles(lrclk_pin))
+        g_adcClockDiag = 3; // LRCK missing
+    else
+        g_adcClockDiag = 0; // all input clocks present
 }
 
 void ADC::dma_isr() {

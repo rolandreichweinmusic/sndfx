@@ -17,17 +17,23 @@
 //   * You hear LIVE INPUT audio -> the ADC is capturing. The original silence
 //     came from the blocking capture wait stalling the loop; the non-blocking
 //     ADC::process() is the real fix -- make it permanent (set this to 0).
-//   * You hear the TONE -> the ADC has never completed a capture DMA
-//     (g_adcCaptureCompletions stays 0): the PCM1808 is not clocking the input
-//     PIO. Check SCKI on GPIO5, the PCM1808 master-mode straps (MD0/MD1), and
-//     BCK/LRCK wiring to GPIO3/GPIO4.
-//   * You hear SILENCE -> the ADC completes captures but the data is zero:
-//     check the DIN/DOUT data line (GPIO2) and the I2S format strap (FMT).
+//   * You hear a repeating pattern of N short BEEPS -> no capture has completed;
+//     N identifies the first dead link in the input clock chain:
+//        1 beep  -> SCKI (GPIO5) not toggling: RP2350 master-clock output dead
+//                   or unwired.
+//        2 beeps -> SCKI ok but BCK (GPIO3) static: PCM1808 is not producing
+//                   clocks -> master-mode straps MD0/MD1 or the SCKI wire to
+//                   the codec.
+//        3 beeps -> BCK ok but LRCK (GPIO4) static: LRCK wiring.
+//   * You hear a STEADY tone -> all input clocks are present but capture still
+//     never completes: data line (GPIO2) wiring or PIO routing.
 // ---------------------------------------------------------------------------
 #define SNDFX_DAC_ADC_MONITOR 1
 
-// Defined in ADC.cpp: capture DMA completion count (0 => input not clocking).
+// Defined in ADC.cpp: capture DMA completion count (0 => input not clocking) and
+// the input-clock detector result (0 = clocks present, 1/2/3 = first dead link).
 extern volatile uint32_t g_adcCaptureCompletions;
+extern volatile uint32_t g_adcClockDiag;
 
 namespace {
 // ~1 kHz square wave at 48 kHz: 24 samples high + 24 low = 48-sample period.
@@ -156,13 +162,41 @@ void DAC::process() {
 
 #if SNDFX_DAC_ADC_MONITOR
     if (g_adcCaptureCompletions == 0) {
-        // ADC has never completed a capture -> emit the known-good tone so a
-        // dead input path is audibly distinct from captured silence.
+        // No captures yet: sound the clock-detector result. code 0 -> steady
+        // tone (clocks present, capture still failing); code N -> N short beeps
+        // identifying the first dead clock line (see the header comment).
+        const unsigned code = g_adcClockDiag;
+        bool toneOn = true;
+        if (code != 0) {
+            constexpr unsigned beepFrames = 8;  // ~21 ms tone burst
+            constexpr unsigned gapFrames  = 8;  // ~21 ms gap between beeps
+            constexpr unsigned groupGap   = 32; // ~85 ms gap between groups
+            const unsigned slot = beepFrames + gapFrames;
+            const unsigned cycle = code * slot + groupGap;
+            static unsigned frameCtr = 0;
+            const unsigned pos = frameCtr % cycle;
+            if (++frameCtr >= cycle)
+                frameCtr = 0;
+            toneOn = false;
+            for (unsigned k = 0; k < code; ++k) {
+                const unsigned start = k * slot;
+                if (pos >= start && pos < start + beepFrames) {
+                    toneOn = true;
+                    break;
+                }
+            }
+        }
+
         static unsigned tonePhase = 0;
         for (size_t i = 0; i < bufferSize; ++i) {
-            const SampleType s = (tonePhase < kToneHalfPeriod) ? kToneAmplitude : -kToneAmplitude;
-            if (++tonePhase >= 2 * kToneHalfPeriod)
+            SampleType s = 0;
+            if (toneOn) {
+                s = (tonePhase < kToneHalfPeriod) ? kToneAmplitude : -kToneAmplitude;
+                if (++tonePhase >= 2 * kToneHalfPeriod)
+                    tonePhase = 0;
+            } else {
                 tonePhase = 0;
+            }
             dst[2 * i]     = s;
             dst[2 * i + 1] = s;
         }
