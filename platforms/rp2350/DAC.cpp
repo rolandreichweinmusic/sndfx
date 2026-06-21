@@ -60,14 +60,21 @@ DAC::DAC(Operation& input, PIO pio, uint sm, uint data_pin, uint bclk_pin)
     pio_sm_set_consecutive_pindirs(_pio, _sm, data_pin, 1, true);   // data out
     pio_sm_set_consecutive_pindirs(_pio, _sm, bclk_pin, 2, true);   // bclk, lrclk out
 
-    // Clock divider for 48kHz sample rate
-    // PIO runs 2 cycles per bit, 64 bits per frame (32L + 32R)
-    // BCLK = 48000 * 64 = 3.072 MHz
-    // PIO clock = 2 * BCLK = 6.144 MHz
-    // div = 150 MHz / 6.144 MHz ≈ 24.41
-    constexpr float sys_clk_hz = 150000000.0f; // RP2350 default
-    float div = sys_clk_hz / (48000.0f * 64.0f * 2.0f);
-    sm_config_set_clkdiv(&c, div);
+    // Clock divider. The output SM runs 2 cycles per bit, 64 bits per frame
+    // (32L + 32R) = 128 SM cycles per frame, so fs = clk_sys / (128 * div).
+    //
+    // Use an INTEGER divider, rounded the same way as the ADC's input clock
+    // generator (ADC.cpp), so the two converters run at exactly the same fs and
+    // stay sample-rate locked: the ADC's clkgen frame is 512 cycles with integer
+    // divider D, this frame is 128 cycles with integer divider 4*D, and
+    // 512*D == 128*(4*D) -> identical fs (clk_sys / 3072 at 150 MHz =
+    // 48.83 kHz). If the rates differed, the ADC->DAC single-buffer hand-off
+    // would periodically slip and click. An integer divider also removes the
+    // PIO fractional-divider jitter from BCK (the PCM5102A's PLL would hide it
+    // anyway, but it keeps both buses clean and exactly locked).
+    const float sys_clk_hz = (float)clock_get_hz(clk_sys);
+    const uint32_t div_int = (uint32_t)(sys_clk_hz / (48000.0f * 64.0f * 2.0f) + 0.5f);
+    sm_config_set_clkdiv(&c, (float)div_int);
 
     pio_sm_init(_pio, _sm, _offset, &c);
 

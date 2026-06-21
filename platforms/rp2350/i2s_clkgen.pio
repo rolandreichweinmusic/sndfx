@@ -34,6 +34,11 @@
 ; 4; LRCK flips at the half boundary, i.e. on a BCK falling edge -- exactly what
 ; the input sampler (i2s_input.pio) expects (LRCK low = left, MSB delayed 1 BCK).
 ;
+; Jitter: the PCM1808 has no PLL and converts directly on SCKI, so SCKI jitter
+; becomes distortion. The caller (ADC.cpp) therefore clocks this SM with an
+; INTEGER divider (no PIO fractional dithering -> jitter-free SCKI) at the cost of
+; a slightly off-nominal fs; the SCKI : BCK : LRCK ratio stays exact regardless.
+;
 ; Side-set value is 0b(SCKI)(LRCK)(BCK): bit2 = SCKI, bit1 = LRCK, bit0 = BCK.
 
 .program i2s_clkgen

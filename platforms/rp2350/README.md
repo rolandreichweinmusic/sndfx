@@ -71,17 +71,27 @@ rather than sharing `pio0` with the 9-instruction input sampler.)
 | VINL / VINR   | Analog audio inputs (left / right)            |
 | VREF / VCOM   | Decoupling capacitors per PCM1808 datasheet   |
 
-> Note: the audio pipeline runs at **fs = 48 kHz** with 32-bit I2S frames
-> (32 bits left + 32 bits right), so BCK = 64 fs = 3.072 MHz and SCKI = 256 fs =
-> 12.288 MHz. A single `pio2` state machine generates SCKI, BCK and LRCK together
-> on GPIO5/GPIO3/GPIO4, emitting an exact **512-cycle** frame clocked at 512 fs:
-> SCKI toggles every cycle (256 fs), BCK every 4 cycles (64 fs) and LRCK every
-> 256 cycles (fs), so the 256 : 64 : 1 ratio is exact. Because a 12 MHz crystal
-> cannot reach 12.288 MHz exactly through the PLL, the SM's clk_sys divider is
-> fractional, so the absolute clock has a little jitter; this affects only ADC
-> SNR, never the ratios. For best ADC SNR a dedicated low-jitter 12.288 MHz (or
-> 24.576 MHz) oscillator feeding SCKI is preferable. All clocks derive from
-> `clk_sys`, so the ADC and DAC sample rates stay locked.
+> Note: the audio pipeline targets **fs ≈ 48 kHz** with 32-bit I2S frames
+> (32 bits left + 32 bits right), so BCK = 64 fs and SCKI = 256 fs. A single
+> `pio2` state machine generates SCKI, BCK and LRCK together on
+> GPIO5/GPIO3/GPIO4, emitting an exact **512-cycle** frame: SCKI toggles every
+> cycle (256 fs), BCK every 4 cycles (64 fs) and LRCK every 256 cycles (fs), so
+> the 256 : 64 : 1 ratio is exact.
+>
+> The PCM1808 has no PLL and converts directly on SCKI, so SCKI jitter becomes
+> audible distortion. The state machine is therefore clocked with an **integer**
+> divider: a PIO *fractional* divider dithers the clock cycle-to-cycle (large
+> SCKI jitter), whereas an integer divider is jitter-free. The trade-off is that
+> fs is not exactly 48 kHz -- at clk_sys = 150 MHz the integer divider is 6, so
+> fs = 150 MHz / (512 × 6) = **48.83 kHz** (a +1.7% pitch offset, irrelevant for
+> a live effects passthrough). The DAC ([DAC.cpp](DAC.cpp)) rounds its divider
+> the same way to exactly 4× this one, so the ADC and DAC run at the **same** fs
+> (clk_sys / 3072) and stay sample-rate locked; otherwise the capture and
+> playback rates drift and the buffer hand-off periodically clicks. For an exact
+> 48 kHz at the lowest jitter, feed SCKI from a dedicated 12.288 MHz (or
+> 24.576 MHz) oscillator instead -- a 12 MHz crystal cannot synthesise an exact
+> 12.288 MHz through the PLL, so every on-chip divider is either fractional
+> (jitter) or off-frequency (this integer-divider trade-off).
 
 ## PCM5102A DAC wiring
 

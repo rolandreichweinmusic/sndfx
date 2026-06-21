@@ -37,14 +37,30 @@ ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
     // without any obvious symptom.
     const float sys_clk_hz = (float)clock_get_hz(clk_sys);
 
-    // The clkgen program is an exact 512-SM-cycle frame (two 256-cycle halves).
-    // Clocking the SM at 512 * fs therefore makes LRCK = fs, BCK = 64 * fs and
-    // SCKI = 256 * fs, with those ratios exact by construction. BCK/LRCK/SCKI are
-    // emitted on bclk_pin..bclk_pin+2 (GPIO3 = BCK, GPIO4 = LRCK, GPIO5 = SCKI).
-    constexpr float frame_cycles = 512.0f;
-    const float i2s_clkdiv = sys_clk_hz / (frame_cycles * 48000.0f);
+    // The clkgen program is an exact 512-SM-cycle frame (two 256-cycle halves),
+    // so SCKI = 256 * fs, BCK = 64 * fs and LRCK = fs (ratios exact by
+    // construction). BCK/LRCK/SCKI are emitted on bclk_pin..bclk_pin+2
+    // (GPIO3 = BCK, GPIO4 = LRCK, GPIO5 = SCKI).
+    //
+    // Use an INTEGER divider. The PCM1808 has no PLL, so it converts directly on
+    // SCKI and is very sensitive to SCKI jitter. A PIO *fractional* divider
+    // dithers the SM clock between two clk_sys periods every cycle, putting large
+    // cycle-to-cycle jitter on SCKI; the delta-sigma modulator turns that into
+    // audible distortion. (The PCM5102A DAC is immune because it has a PLL that
+    // cleans its clock.) Rounding to an integer divider makes SCKI jitter-free at
+    // the cost of a slightly off-nominal fs -- e.g. 150 MHz / (512 * 6) =
+    // 48.83 kHz instead of 48 kHz, a +1.7% pitch offset that is irrelevant for a
+    // live effects passthrough (there is no pitch reference). The 256:64:1 ratio
+    // is unaffected. A true 48 kHz with the lowest jitter needs an external
+    // 12.288 MHz oscillator on SCKI (see README).
+    //
+    // The matching DAC (DAC.cpp) rounds its divider the same way, to exactly
+    // 4 * this one, so the ADC and DAC run at the *same* fs (sample-rate locked,
+    // sys / 3072 each) -- otherwise the capture and playback rates drift and the
+    // single-buffer hand-off periodically slips.
+    const uint32_t clk_div_int = (uint32_t)(sys_clk_hz / (512.0f * 48000.0f) + 0.5f);
     uint clk_offset = pio_add_program(clk_pio, &i2s_clkgen_program);
-    i2s_clkgen_program_init(clk_pio, clk_sm, clk_offset, bclk_pin, i2s_clkdiv);
+    i2s_clkgen_program_init(clk_pio, clk_sm, clk_offset, bclk_pin, (float)clk_div_int);
 
     // Load PIO program
     _offset = pio_add_program(_pio, &i2s_input_program);
