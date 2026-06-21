@@ -7,6 +7,7 @@
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
 #include "hardware/gpio.h"
+#include "hardware/timer.h"
 
 ADC* ADC::_instance = nullptr;
 
@@ -49,15 +50,29 @@ ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
     // pin once per instruction (two instructions per period), so the state
     // machine runs at 2 * SCKI.
     //
-    // A 12 MHz crystal cannot synthesise 12.288 MHz exactly through the PLL, so
-    // this divider is fractional: SCKI carries a small (~0.03%) frequency offset
-    // and some jitter. The PCM1808 (via SCKI) and PCM5102A (via clk_sys) both
-    // derive their timing from clk_sys, so the ADC and DAC sample rates stay
-    // locked to each other regardless of the absolute value.
-    constexpr float sys_clk_hz = 150000000.0f; // RP2350 default (runtime_init_clocks)
+    // Derive the divider from the *actual* system clock rather than assuming
+    // 150 MHz: if runtime_init_clocks ever brings clk_sys up at a different
+    // frequency, a hardcoded constant would skew SCKI (and thus the codec's fs)
+    // without any obvious symptom.
+    const float sys_clk_hz = (float)clock_get_hz(clk_sys);
     constexpr float scki_hz = 256.0f * 48000.0f; // 12.288 MHz
     uint sck_offset = pio_add_program(_pio, &mclk_program);
     mclk_program_init(_pio, sck_sm, sck_offset, sck_pin, sys_clk_hz / (2.0f * scki_hz));
+
+    // ---- PCM1808 startup-reset workaround ----
+    // The codec's 3.3 V supply comes up at board power-on, but SCKI only starts
+    // here, hundreds of ms later, once the RP2350 has booted. A PCM1808 whose
+    // internal power-on reset completed without a valid SCKI can latch into a
+    // state where it never generates BCK/LRCK -- exactly the "SCKI toggles, BCK
+    // static" symptom. Master mode is a pure SCKI divider (no PLL), so the only
+    // lever we have is SCKI itself: now that the supply is long stable, hold
+    // SCKI running briefly, then stop and restart it to present a clean clock
+    // (re)start that re-triggers the codec's clock generation.
+    busy_wait_us_32(100000);                       // 100 ms: supply + SCKI settle
+    pio_sm_set_enabled(_pio, sck_sm, false);       // drop SCKI
+    busy_wait_us_32(5000);                          // 5 ms with SCKI stopped
+    pio_sm_set_enabled(_pio, sck_sm, true);        // clean SCKI restart (the "kick")
+    busy_wait_us_32(5000);                          // let the codec re-acquire
 
     // Load PIO program
     _offset = pio_add_program(_pio, &i2s_input_program);
