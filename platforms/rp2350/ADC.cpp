@@ -9,6 +9,12 @@
 
 ADC* ADC::_instance = nullptr;
 
+// Diagnostic (read by DAC.cpp): number of completed capture DMAs. Stays 0 if the
+// PCM1808 is not clocking the input PIO (no BCK/LRCK), so capture never completes
+// and this never advances. Lets the DAC distinguish "input not clocking" from
+// "input clocking but data is zero".
+volatile uint32_t g_adcCaptureCompletions = 0;
+
 ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
          uint sck_pin, uint sck_sm)
     : _pio(pio), _sm(sm) {
@@ -62,6 +68,13 @@ ADC::ADC(PIO pio, uint sm, uint data_pin, uint bclk_pin, uint lrclk_pin,
     pio_sm_init(_pio, _sm, _offset, &c);
 
     _instance = this;
+
+    // Start the capture buffers and the published buffer silent so a not-yet-
+    // live (or never-live) ADC yields clean silence rather than indeterminate
+    // memory.
+    _capture[0].fill(0);
+    _capture[1].fill(0);
+    _buffer.fill(0);
 
     // Configure DMA for continuous double-buffered capture. The channel fills
     // one buffer, then the completion ISR re-arms it into the other, so the RX
@@ -117,16 +130,18 @@ void ADC::onDmaComplete() {
     _captureIndex = next;
     _readyIndex = filled;
     _readyValid = true;
+    g_adcCaptureCompletions = g_adcCaptureCompletions + 1;
 }
 
 void ADC::process() {
-    // Block until the DMA has a freshly captured buffer, then publish it into
-    // the pipeline buffer returned by getBuffer(). The DMA fills the other
-    // buffer meanwhile, so capture continues without gaps.
-    while (!_readyValid)
-        tight_loop_contents();
-
-    const unsigned idx = _readyIndex;
-    _readyValid = false;
-    _buffer = _capture[idx];
+    // Non-blocking: publish the most recently captured buffer if the DMA has
+    // completed since the last call; otherwise leave the previous contents in
+    // place. A blocking wait here would hang the entire pipeline if the PCM1808
+    // is not clocking the input PIO, because the capture DMA would never
+    // complete -- which is exactly the failure being diagnosed.
+    if (_readyValid) {
+        const unsigned idx = _readyIndex;
+        _readyValid = false;
+        _buffer = _capture[idx];
+    }
 }

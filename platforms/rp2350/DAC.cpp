@@ -7,22 +7,27 @@
 #include "hardware/irq.h"
 
 // ---------------------------------------------------------------------------
-// DIAGNOSTIC: set to 1 to emit a generated ~1 kHz tone and BYPASS the input
-// (ADC + Compressor) entirely; set to 0 for normal passthrough.
+// DIAGNOSTIC: set to 1 to run the ADC-liveness monitor; set to 0 for normal
+// passthrough.
 //
-// Purpose: isolate the output chain (PIO -> DMA -> completion IRQ re-arm ->
-// PCM5102A -> XSMT/wiring/speaker) from the capture path. The main loop calls
-// input.process() first, which BLOCKS until the ADC DMA completes; if the
-// PCM1808 is not clocking, that wait never returns and only silence is ever
-// written to the DAC -- even when the DAC side is perfectly healthy. This mode
-// removes that dependency:
-//   * tone audible -> output chain is good; the fault is upstream (ADC/codec
-//     clocking or the passthrough), so debug capture next.
-//   * still silent -> fault is in the output chain or DAC hardware (clock not
-//     running, XSMT mute, wiring), so scope BCK/LRCK and check XSMT.
-// Revert to 0 once the fault is isolated.
+// The tone test already proved the output chain (PIO -> DMA -> completion IRQ
+// re-arm -> PCM5102A -> wiring -> speaker) is healthy, so the remaining silence
+// is in the capture path. This monitor makes the ADC's status audible:
+//
+//   * You hear LIVE INPUT audio -> the ADC is capturing. The original silence
+//     came from the blocking capture wait stalling the loop; the non-blocking
+//     ADC::process() is the real fix -- make it permanent (set this to 0).
+//   * You hear the TONE -> the ADC has never completed a capture DMA
+//     (g_adcCaptureCompletions stays 0): the PCM1808 is not clocking the input
+//     PIO. Check SCKI on GPIO5, the PCM1808 master-mode straps (MD0/MD1), and
+//     BCK/LRCK wiring to GPIO3/GPIO4.
+//   * You hear SILENCE -> the ADC completes captures but the data is zero:
+//     check the DIN/DOUT data line (GPIO2) and the I2S format strap (FMT).
 // ---------------------------------------------------------------------------
-#define SNDFX_DAC_TEST_TONE 1
+#define SNDFX_DAC_ADC_MONITOR 1
+
+// Defined in ADC.cpp: capture DMA completion count (0 => input not clocking).
+extern volatile uint32_t g_adcCaptureCompletions;
 
 namespace {
 // ~1 kHz square wave at 48 kHz: 24 samples high + 24 low = 48-sample period.
@@ -134,10 +139,10 @@ void DAC::onDmaComplete() {
 }
 
 void DAC::process() {
-#if !SNDFX_DAC_TEST_TONE
+    // Pull the latest input audio. With the non-blocking ADC this never stalls
+    // the loop; the DAC's own DMA/ISR keeps the bit clock running regardless.
     input.process();
     const BufferType& samples = input.getBuffer();
-#endif
 
     // Wait until the ISR releases the buffer that is not currently playing.
     // This blocking wait paces the loop to the DAC's frame rate; the DMA keeps
@@ -149,18 +154,22 @@ void DAC::process() {
     _freeReady = false;
     StereoBuffer& dst = _stereo[idx];
 
-#if SNDFX_DAC_TEST_TONE
-    // Diagnostic: synthesise a square wave straight into both slots, ignoring
-    // the input so a stuck ADC cannot mask an otherwise-working output chain.
-    static unsigned tonePhase = 0;
-    for (size_t i = 0; i < bufferSize; ++i) {
-        const SampleType s = (tonePhase < kToneHalfPeriod) ? kToneAmplitude : -kToneAmplitude;
-        if (++tonePhase >= 2 * kToneHalfPeriod)
-            tonePhase = 0;
-        dst[2 * i]     = s;
-        dst[2 * i + 1] = s;
+#if SNDFX_DAC_ADC_MONITOR
+    if (g_adcCaptureCompletions == 0) {
+        // ADC has never completed a capture -> emit the known-good tone so a
+        // dead input path is audibly distinct from captured silence.
+        static unsigned tonePhase = 0;
+        for (size_t i = 0; i < bufferSize; ++i) {
+            const SampleType s = (tonePhase < kToneHalfPeriod) ? kToneAmplitude : -kToneAmplitude;
+            if (++tonePhase >= 2 * kToneHalfPeriod)
+                tonePhase = 0;
+            dst[2 * i]     = s;
+            dst[2 * i + 1] = s;
+        }
+        return;
     }
-#else
+#endif
+
     // The pipeline carries one mono channel, but the PCM5102A is clocked for
     // stereo I2S (two 32-bit words per frame). Duplicate each mono sample into
     // the left and right slots so both outputs carry the same audio and the
@@ -169,5 +178,4 @@ void DAC::process() {
         dst[2 * i]     = samples[i];
         dst[2 * i + 1] = samples[i];
     }
-#endif
 }
