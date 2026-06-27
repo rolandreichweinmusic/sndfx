@@ -1,9 +1,13 @@
+#include <etl/error_handler.h>
+
 #include "Platform.h"
 #include "ADC.h"
 #include "DAC.h"
 #include "Compressor.h"
 
 int main() {
+    etl::set_assert_function(Platform::error_handler);
+
     Platform platform;
 
     ADC adc1;

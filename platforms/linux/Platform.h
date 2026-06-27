@@ -1,5 +1,9 @@
 #pragma once
 
+#include <iostream>
+
+#include <etl/error_handler.h>
+
 // Activates low-latency audio capabilities for the Linux/ALSA build:
 //   * locks the process memory so page faults cannot stall the audio loop, and
 //   * switches the audio thread to the SCHED_FIFO real-time scheduling policy
@@ -12,4 +16,6 @@
 class Platform {
 public:
     Platform();
+
+    static void error_handler(const etl::exception& e);
 };

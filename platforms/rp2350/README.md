@@ -156,3 +156,36 @@ so no external system clock (SCKI) is required:
 > set by the ISR rather than on the DMA itself, which paces the loop to the
 > frame rate while the converters keep streaming. A one-shot, blocking DMA
 > stalls BCK between buffers and is heard as silence.
+
+## Debug UART
+
+Formatted output from `etl::print` / `etl::println` (for example the ETL error
+handler in [Platform.cpp](Platform.cpp)) is routed to a serial console over
+**UART0**. ETL funnels every character through the `etl_putchar` hook, which
+[Platform.cpp](Platform.cpp) implements by writing to the UART; the peripheral
+is brought up lazily on the first character so the first log line is emitted
+correctly no matter when it occurs.
+
+### Signal connections
+
+These are the Seeed XIAO RP2350 board defaults (`PICO_DEFAULT_UART*`) and are the
+two pins left free by the I2S buses — the ADC owns GPIO2–5 and the DAC GPIO26–28.
+
+| RP2350 GPIO | Signal | Direction (RP2350) | USB-serial adapter |
+| ----------- | ------ | ------------------ | ------------------ |
+| GPIO0       | TX     | Output             | RX                 |
+| GPIO1       | RX     | Input              | TX                 |
+| GND         | Ground | —                  | GND                |
+
+The line format is **115200 baud, 8 data bits, no parity, 1 stop bit (8N1)**
+(`PICO_DEFAULT_UART_BAUD_RATE`; `uart_init` configures 8N1). Connect a 3.3 V
+USB-to-serial adapter and open it at 115200 8N1, e.g. `screen /dev/ttyUSB0
+115200` or `minicom -D /dev/ttyUSB0 -b 115200`.
+
+> Note: the firmware only **transmits** — logging is output-only, so in practice
+> only GPIO0 (TX) and GND need to be wired. GPIO1 is the board's default UART RX
+> pin and is listed for completeness; it is reserved for the UART but not read by
+> the current firmware. The RP2350 GPIOs are **3.3 V** logic and are not 5 V
+> tolerant, so use a 3.3 V adapter. Newlines (`\n`) are expanded to CR+LF in
+> [Platform.cpp](Platform.cpp) so lines break correctly on a serial terminal.
+

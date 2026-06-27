@@ -42,3 +42,17 @@ Platform::Platform() {
                    strerror(err));
     }
 }
+
+void Platform::error_handler(const etl::exception& e) {
+    std::cerr << "ETL error: " << e.what() << std::endl;
+    exit(1);
+}
+
+extern "C" void etl_putchar(int c)
+{
+    // Expand newlines to CR+LF so lines break correctly on a terminal.
+    if (c == '\n') {
+        std::putchar('\r');
+    }
+    std::putchar(c);
+}

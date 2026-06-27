@@ -8,4 +8,6 @@
 class Platform {
 public:
     Platform();
+
+    static void error_handler(const etl::exception& e);
 };

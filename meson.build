@@ -3,6 +3,7 @@ project('sndfx', ['c', 'cpp'],
     default_options: [
         'cpp_std=c++23',
         'c_std=c11',
+        'cpp_eh=none',
         'warning_level=2',
         'werror=true',
     ],

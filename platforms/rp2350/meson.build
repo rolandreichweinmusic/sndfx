@@ -111,6 +111,7 @@ pico_sdk_src = files(
     pico_sdk_path / 'src' / 'rp2_common' / 'hardware_pio' / 'pio.c',
     pico_sdk_path / 'src' / 'rp2_common' / 'hardware_dma' / 'dma.c',
     pico_sdk_path / 'src' / 'rp2_common' / 'hardware_irq' / 'irq.c',
+    pico_sdk_path / 'src' / 'rp2_common' / 'hardware_uart' / 'uart.c',
     pico_sdk_path / 'src' / 'rp2_common' / 'pico_platform_panic' / 'panic.c',
     pico_sdk_path / 'src' / 'common' / 'hardware_claim' / 'claim.c',
 )

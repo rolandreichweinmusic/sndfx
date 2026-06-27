@@ -1,6 +1,9 @@
 // PCM5102A
 
 #include "DAC.h"
+
+#include <etl/ranges.h>
+
 #include "i2s_output.pio.h"
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
@@ -135,8 +138,14 @@ void DAC::process() {
     // stereo I2S (two 32-bit words per frame). Duplicate each mono sample into
     // the left and right slots so both outputs carry the same audio and the
     // DAC consumes exactly one input sample per frame.
+    #if 0
     for (size_t i = 0; i < samples.size(); ++i) {
         dst[2 * i]     = samples[i];
         dst[2 * i + 1] = samples[i];
     }
+    #else
+    auto stereo = samples | etl::views::transform([](int s) { return etl::views::repeat(s, 2); }) | etl::views::join;
+
+    etl::ranges::copy(stereo, dst.begin());
+    #endif
 }

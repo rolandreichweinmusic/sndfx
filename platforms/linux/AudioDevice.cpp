@@ -1,6 +1,7 @@
 #include "AudioDevice.h"
 #include "Operation.h"
 #include <etl/array.h>
+#include <etl/error_handler.h>
 #include <etl/exception.h>
 #include <cerrno>
 #include <cstdint>
@@ -27,12 +28,10 @@ public:
 
 AudioDevice::AudioDevice(const char* device, unsigned int rate, unsigned int channels) {
     int err = snd_pcm_open(&_capture, device, SND_PCM_STREAM_CAPTURE, 0);
-    if (err < 0)
-        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    ETL_ASSERT(err >= 0, audio_device_error(snd_strerror(err), __FILE__, __LINE__));
 
     err = snd_pcm_open(&_playback, device, SND_PCM_STREAM_PLAYBACK, 0);
-    if (err < 0)
-        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    ETL_ASSERT(err >= 0, audio_device_error(snd_strerror(err), __FILE__, __LINE__));
 
     configure(_capture, rate, channels);
     configure(_playback, rate, channels);
@@ -42,8 +41,8 @@ AudioDevice::AudioDevice(const char* device, unsigned int rate, unsigned int cha
     // implemented"). Linking is only an optimization, so fall back to starting
     // the streams independently instead of aborting.
     err = snd_pcm_link(_capture, _playback);
-    if (err < 0 && err != -ENOSYS)
-        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    ETL_ASSERT(err >= 0 || err == -ENOSYS,
+               audio_device_error(snd_strerror(err), __FILE__, __LINE__));
     bool linked = (err >= 0);
 
     snd_pcm_prepare(_capture);
@@ -88,17 +87,13 @@ void AudioDevice::configure(snd_pcm_t* pcm, unsigned int rate, unsigned int chan
     // capture/playback loop keeps interpreting the bytes as mono S32 -- which
     // is heard as heavily distorted audio rather than a clean failure.
     int err = snd_pcm_hw_params_set_access(pcm, params, SND_PCM_ACCESS_RW_INTERLEAVED);
-    if (err < 0)
-        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    ETL_ASSERT(err >= 0, audio_device_error(snd_strerror(err), __FILE__, __LINE__));
     err = snd_pcm_hw_params_set_format(pcm, params, SND_PCM_FORMAT_S32_LE);
-    if (err < 0)
-        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    ETL_ASSERT(err >= 0, audio_device_error(snd_strerror(err), __FILE__, __LINE__));
     err = snd_pcm_hw_params_set_channels(pcm, params, channels);
-    if (err < 0)
-        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    ETL_ASSERT(err >= 0, audio_device_error(snd_strerror(err), __FILE__, __LINE__));
     err = snd_pcm_hw_params_set_rate_near(pcm, params, &rate, nullptr);
-    if (err < 0)
-        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    ETL_ASSERT(err >= 0, audio_device_error(snd_strerror(err), __FILE__, __LINE__));
 
     // Pin the period and buffer sizes; the _near calls write back the values
     // actually selected by the device.
@@ -108,8 +103,7 @@ void AudioDevice::configure(snd_pcm_t* pcm, unsigned int rate, unsigned int chan
     snd_pcm_hw_params_set_buffer_size_near(pcm, params, &buffer);
 
     err = snd_pcm_hw_params(pcm, params);
-    if (err < 0)
-        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    ETL_ASSERT(err >= 0, audio_device_error(snd_strerror(err), __FILE__, __LINE__));
 
     // Only start a stream when explicitly told to, so priming the playback
     // buffer with silence cannot trip an early auto-start.
@@ -119,8 +113,7 @@ void AudioDevice::configure(snd_pcm_t* pcm, unsigned int rate, unsigned int chan
     snd_pcm_sw_params_set_start_threshold(pcm, sw, buffer);
     snd_pcm_sw_params_set_avail_min(pcm, sw, period);
     err = snd_pcm_sw_params(pcm, sw);
-    if (err < 0)
-        throw audio_device_error(snd_strerror(err), __FILE__, __LINE__);
+    ETL_ASSERT(err >= 0, audio_device_error(snd_strerror(err), __FILE__, __LINE__));
 }
 
 void AudioDevice::primePlayback(unsigned int channels) {
