@@ -1,6 +1,7 @@
 // PCM5102A
 
 #include "DAC.h"
+#include "CPULoad.h"
 
 #include <etl/ranges.h>
 
@@ -124,11 +125,14 @@ void DAC::process() {
     input.process();
     const BufferType& samples = input.getBuffer();
 
-    // Wait until the ISR releases the buffer that is not currently playing.
-    // This blocking wait paces the loop to the DAC's frame rate; the DMA keeps
-    // streaming the other buffer meanwhile, so the bit clock stays continuous.
-    while (!_freeReady)
-        tight_loop_contents();
+    {
+        CPULoad::IdleGuard idleGuard(CPULoad::instance());
+        // Wait until the ISR releases the buffer that is not currently playing.
+        // This blocking wait paces the loop to the DAC's frame rate; the DMA keeps
+        // streaming the other buffer meanwhile, so the bit clock stays continuous.
+        while (!_freeReady)
+            tight_loop_contents();
+    }
 
     const unsigned idx = _freeIndex;
     _freeReady = false;

@@ -1,8 +1,9 @@
 #pragma once
 
 #include <etl/chrono.h>
+#include <etl/singleton_base.h>
 
-class CPULoad
+class CPULoad: public etl::singleton_base<CPULoad>
 {
     public:
         using clock = etl::chrono::high_resolution_clock;
@@ -12,6 +13,7 @@ class CPULoad
         void add(const clock::duration& duration);
         void newPeriod();
         float lastLoad() const;
+        clock::time_point measurementPoint() const;
 
     class IdleGuard
     {

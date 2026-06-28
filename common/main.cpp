@@ -10,6 +10,8 @@
 #include "CPULoad.h"
 
 int main() {
+    CPULoad cpuLoad; // init singleton
+
     etl::set_assert_function(Platform::error_handler);
 
     Platform platform;

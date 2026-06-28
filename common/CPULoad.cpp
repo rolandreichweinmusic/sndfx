@@ -3,7 +3,8 @@
 using namespace etl::chrono_literals;
 
 CPULoad::CPULoad()
-  : _measurementPoint(clock::now())
+  : etl::singleton_base<CPULoad>(*this)
+  , _measurementPoint(clock::now())
   , _idleDuration(clock::duration::zero())
 {
 }
@@ -27,6 +28,11 @@ void CPULoad::newPeriod()
 float CPULoad::lastLoad() const
 {
     return _lastLoad;
+}
+
+CPULoad::clock::time_point CPULoad::measurementPoint() const
+{
+    return _measurementPoint;
 }
 
 CPULoad::IdleGuard::IdleGuard(CPULoad& cpuLoad): _cpuLoad(cpuLoad), _start(clock::now())
