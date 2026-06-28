@@ -19,7 +19,8 @@ etl_dep = dependency('etl',
 common_inc = include_directories('common')
 common_src = files('common/main.cpp',
 'common/Compressor.cpp',
-'common/Operation.cpp')
+'common/Operation.cpp',
+'common/CPULoad.cpp')
 
 # Platform selection based on cross-compilation
 if meson.is_cross_build()

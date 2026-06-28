@@ -79,6 +79,12 @@ pico_inc = include_directories(
     pico_sdk_path / 'src' / 'common' / 'boot_picobin_headers' / 'include',
     pico_sdk_path / 'src' / 'common' / 'boot_picoboot_headers' / 'include',
     pico_sdk_path / 'src' / 'boards' / 'include',
+    # Hardware-accelerated floating point: pico_float (single precision, VFP)
+    # and pico_double (double precision, DCP coprocessor) public headers, plus
+    # the DCP instruction-macro headers included by the double assembly.
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_float' / 'include',
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_double' / 'include',
+    pico_sdk_path / 'src' / 'rp2_common' / 'hardware_dcp' / 'include',
     is_system: true,
 )
 
@@ -161,6 +167,83 @@ pico_support = static_library('pico_support',
     override_options: ['warning_level=1', 'werror=false', 'c_std=gnu11'],
 )
 
+# Hardware-accelerated floating-point math from the Pico SDK.
+#
+# pico_float: single-precision routines that use the Cortex-M33's single-
+# precision VFP for basic arithmetic, comparison, conversion and sqrtf (left to
+# the compiler/hardware, hence not wrapped below), plus optimised VFP assembly
+# for the transcendentals (sinf, cosf, expf, logf, ...).
+#
+# pico_double: double-precision routines that use the RP2350 DCP (Double
+# Coprocessor) hardware for the AEABI arithmetic/compare/convert helpers and
+# FMA, plus optimised M33 assembly for the transcendentals. The Cortex-M33 has
+# no double-precision FPU, so the DCP is the hardware path for double.
+#
+# Both are activated by --wrap'ing the relevant libm/AEABI symbols (see the
+# executable link_args below) so calls resolve to these implementations instead
+# of the generic GCC soft-float / newlib versions. The VFP and DCP coprocessors
+# are enabled at boot by runtime_init_per_core_enable_coprocessors(), already
+# linked in via runtime_init.c. Compiled with relaxed warnings like
+# pico_support since this is third-party SDK code.
+pico_math_src = files(
+    # pico_float -- VFP single precision
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_float' / 'float_math.c',
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_float' / 'float_conv32_vfp.S',
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_float' / 'float_common_m33.S',
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_float' / 'float_sci_m33_vfp.S',
+    # pico_double -- DCP double precision
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_double' / 'double_math.c',
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_double' / 'double_aeabi_dcp.S',
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_double' / 'double_fma_dcp.S',
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_double' / 'double_sci_m33.S',
+    pico_sdk_path / 'src' / 'rp2_common' / 'pico_double' / 'double_conv_m33.S',
+)
+
+pico_math = static_library('pico_math',
+    pico_math_src,
+    include_directories: [rp2350_inc, pico_inc],
+    pic: false,
+    override_options: ['warning_level=1', 'werror=false', 'c_std=gnu11'],
+)
+
+# Symbols redirected to the pico_float (VFP) implementation. Mirrors the wrap
+# set of pico_float_pico_vfp in the SDK: basic arithmetic, comparisons, 32-bit
+# conversions and sqrtf are intentionally left to the hardware VFP and so are
+# NOT wrapped.
+pico_float_wrap = [
+    # 64-bit <-> float conversions (optimised M33 versions)
+    '__aeabi_l2f', '__aeabi_ul2f', '__aeabi_f2lz', '__aeabi_f2ulz',
+    # core transcendentals (optimised VFP versions)
+    'cosf', 'sinf', 'tanf', 'atan2f', 'expf', 'logf', 'sincosf',
+    # extra math functions
+    'ldexpf', 'copysignf', 'truncf', 'floorf', 'ceilf', 'roundf',
+    'asinf', 'acosf', 'atanf', 'sinhf', 'coshf', 'tanhf',
+    'asinhf', 'acoshf', 'atanhf', 'exp2f', 'log2f', 'exp10f', 'log10f',
+    'powf', 'powintf', 'hypotf', 'cbrtf', 'fmodf', 'dremf', 'remainderf',
+    'remquof', 'expm1f', 'log1pf', 'fmaf',
+]
+
+# Symbols redirected to the pico_double (DCP) implementation. The M33 has no
+# double FPU, so every AEABI double helper is wrapped to the DCP routines.
+pico_double_wrap = [
+    '__aeabi_dadd', '__aeabi_ddiv', '__aeabi_dmul', '__aeabi_drsub', '__aeabi_dsub',
+    '__aeabi_cdcmpeq', '__aeabi_cdrcmple', '__aeabi_cdcmple',
+    '__aeabi_dcmpeq', '__aeabi_dcmplt', '__aeabi_dcmple', '__aeabi_dcmpge',
+    '__aeabi_dcmpgt', '__aeabi_dcmpun',
+    '__aeabi_i2d', '__aeabi_l2d', '__aeabi_ui2d', '__aeabi_ul2d',
+    '__aeabi_d2iz', '__aeabi_d2lz', '__aeabi_d2uiz', '__aeabi_d2ulz', '__aeabi_d2f',
+    'sqrt', 'cos', 'sin', 'tan', 'atan2', 'exp', 'log',
+    'ldexp', 'copysign', 'trunc', 'floor', 'ceil', 'round', 'sincos',
+    'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh',
+    'exp2', 'log2', 'exp10', 'log10', 'pow', 'powint', 'hypot', 'cbrt',
+    'fmod', 'drem', 'remainder', 'remquo', 'expm1', 'log1p', 'fma',
+]
+
+pico_math_link_args = []
+foreach fn : pico_float_wrap + pico_double_wrap
+    pico_math_link_args += '-Wl,--wrap=' + fn
+endforeach
+
 # Linker script that places the binary in XIP flash at 0x10000000 with the
 # correct RP2350 memory map. memmap_default.ld INCLUDEs pico_flash_region.ld,
 # both of which live in the linker/ directory below (added to the linker search
@@ -179,6 +262,7 @@ sndfx_rp2350 = executable('sndfx',
     include_directories: [common_inc, rp2350_inc, pico_inc],
     dependencies: [etl_dep],
     link_whole: pico_support,
+    link_with: pico_math,
     cpp_args: ['-include', meson.project_source_root() / 'common' / 'etl_profile.h'],
     link_args: [
         '-T' + linker_script,
@@ -188,6 +272,6 @@ sndfx_rp2350 = executable('sndfx',
         # .data load segment, which is necessarily writable and executable; the
         # RP2350 memory map relies on this, so silence ld's RWX-segment warning.
         '-Wl,--no-warn-rwx-segments',
-    ],
+    ] + pico_math_link_args,
     link_depends: [linker_script, linker_dir / 'pico_flash_region.ld'],
 )

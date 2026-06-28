@@ -1,5 +1,6 @@
 #include "Platform.h"
 
+#include <chrono>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -8,6 +9,8 @@
 #include <pthread.h>
 #include <sched.h>
 #include <sys/mman.h>
+
+#include <etl/chrono.h>
 
 namespace {
 // Real-time priority for the audio thread. Kept below the top of the SCHED_FIFO
@@ -48,11 +51,40 @@ void Platform::error_handler(const etl::exception& e) {
     exit(1);
 }
 
-extern "C" void etl_putchar(int c)
+extern "C"
+{
+
+void etl_putchar(int c)
 {
     // Expand newlines to CR+LF so lines break correctly on a terminal.
     if (c == '\n') {
         std::putchar('\r');
     }
     std::putchar(c);
+}
+
+// ETL's clocks are configured with a nanosecond duration (the default for this
+// 32-bit-int-or-wider platform), so each hook returns the current count of its
+// std::chrono counterpart expressed in nanoseconds since that clock's epoch.
+etl::chrono::high_resolution_clock::rep etl_get_high_resolution_clock()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::high_resolution_clock::now().time_since_epoch())
+        .count();
+}
+
+etl::chrono::system_clock::rep etl_get_system_clock()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+etl::chrono::steady_clock::rep etl_get_steady_clock()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 }

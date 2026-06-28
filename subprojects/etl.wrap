@@ -1,7 +1,12 @@
 [wrap-git]
-url = https://github.com/ETLCPP/etl.git
+
+#url = https://github.com/ETLCPP/etl.git
 #revision = 20.47.1
-revision = development
+#revision = development
+
+url = https://github.com/rolandreichweinbmw/etl.git
+revision = chrono-add-missing-interfaces
+
 depth = 1
 
 [provide]

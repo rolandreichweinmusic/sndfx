@@ -166,6 +166,23 @@ handler in [Platform.cpp](Platform.cpp)) is routed to a serial console over
 is brought up lazily on the first character so the first log line is emitted
 correctly no matter when it occurs.
 
+### Communication parameters
+
+[Platform.cpp](Platform.cpp) brings the port up with
+`uart_init(uart_default, PICO_DEFAULT_UART_BAUD_RATE)`, which selects UART0 at
+115200 baud and the SDK's default **8N1** framing with hardware flow control
+(RTS/CTS) disabled. The line format is fixed at firmware build time:
+
+| Parameter    | Value                                  |
+| ------------ | -------------------------------------- |
+| Peripheral   | UART0 (`uart_default`)                 |
+| Baud rate    | 115200 (`PICO_DEFAULT_UART_BAUD_RATE`) |
+| Data bits    | 8                                      |
+| Parity       | None                                   |
+| Stop bits    | 1                                      |
+| Flow control | None (no RTS/CTS)                      |
+| Logic level  | 3.3 V (not 5 V tolerant)               |
+
 ### Signal connections
 
 These are the Seeed XIAO RP2350 board defaults (`PICO_DEFAULT_UART*`) and are the
@@ -177,10 +194,9 @@ two pins left free by the I2S buses — the ADC owns GPIO2–5 and the DAC GPIO2
 | GPIO1       | RX     | Input              | TX                 |
 | GND         | Ground | —                  | GND                |
 
-The line format is **115200 baud, 8 data bits, no parity, 1 stop bit (8N1)**
-(`PICO_DEFAULT_UART_BAUD_RATE`; `uart_init` configures 8N1). Connect a 3.3 V
-USB-to-serial adapter and open it at 115200 8N1, e.g. `screen /dev/ttyUSB0
-115200` or `minicom -D /dev/ttyUSB0 -b 115200`.
+Connect a 3.3 V USB-to-serial adapter and open it at the **115200 8N1** line
+format from [Communication parameters](#communication-parameters) above, e.g.
+`screen /dev/ttyUSB0 115200` or `minicom -D /dev/ttyUSB0 -b 115200`.
 
 > Note: the firmware only **transmits** — logging is output-only, so in practice
 > only GPIO0 (TX) and GND need to be wired. GPIO1 is the board's default UART RX
